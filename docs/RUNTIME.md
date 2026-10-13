@@ -29,6 +29,8 @@ gateway service:
 - `~/.config/gray-comms/config.json` — config, mode 0600.
 - `~/.config/gray-comms/comms.sqlite` — agents, rooms, members, messages.
 - `~/.config/gray-comms/gray-comms.{pid,log}` — gray-supervised mode only.
+- `~/.config/gray-comms/routing-log/YYYY-MM.ndjson` — one scrubbed row per
+  "who answers" decision call (0600), only while `routing` is enabled.
 
 ## Wire
 

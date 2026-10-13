@@ -60,10 +60,43 @@ inspect without installing: `gray plugin check <path-to-binary>`.
 | `home_room` | default room for `comms_say` (default `lobby`) |
 | `token` | optional shared secret required at `join` — set for LAN |
 | `history_limit` | room history kept per room (default 500, max 100k) |
+| `routing` | optional "who answers" section — see below |
 | `gray_bin` / `gray_home` / `workdir` | absolute paths, written by setup |
 
 State (agents, rooms, memberships, message log) lives in `comms.sqlite`
 beside the config and survives daemon restarts.
+
+### Room routing ("who answers")
+
+Off by default. When `routing.enabled` is on, a room listed in
+`routing.rooms` narrows which members get the live `room_message` push —
+history still records the message for everyone:
+
+```json
+"routing": {
+  "enabled": true,
+  "timeout_ms": 1500,
+  "rooms": {"dev": "auto", "ops": "lead"},
+  "leads": {"dev": "alice"},
+  "descriptions": {"alice": "ops lead — deploys and incidents"},
+  "model": {"base_url": "http://127.0.0.1:4000/v1", "model": "local-small",
+            "api_key_env": "OPENAI_API_KEY"}
+}
+```
+
+- `lead` — only the lead (`leads.<room>`, else the first member) is pushed.
+- `auto` — a mention-less message triggers one cheap model call that picks
+  a responder from the member list (plus an `@several` option): p ≥ 0.6
+  pushes only that member, `@several` ≥ 0.6 pushes everyone, anything less
+  falls back to the lead. Any error, timeout, or unparseable answer fails
+  open — the room does exactly what it did before.
+- `model` is an OpenAI-Responses upstream (`{base_url}/responses`); when
+  absent the decider uses the cheap tier of `<gray_home>/router.json`
+  (`tiers.cheap`, then `default_tier`, then cheapest configured). No
+  resolvable model = fail open.
+- Every call that reaches the model appends one scrubbed row to
+  `routing-log/YYYY-MM.ndjson` next to `comms.sqlite` (mode 0600) — choice,
+  p, latency, a 16-char state hash; never message text.
 
 ## Tools
 

@@ -125,6 +125,65 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
             return Err("home_room must be a room slug like #dev or dev".to_string());
         }
     }
+    if let Some(v) = data.get("routing") {
+        let r = match v.as_object() {
+            Some(r) => r,
+            None => return Err("routing must be an object".to_string()),
+        };
+        if let Some(b) = r.get("enabled") {
+            if !b.is_boolean() {
+                return Err("routing.enabled must be a boolean".to_string());
+            }
+        }
+        if let Some(n) = r.get("timeout_ms") {
+            if !n.as_u64().is_some_and(|n| (100..=30_000).contains(&n)) {
+                return Err("routing.timeout_ms must be 100..=30000".to_string());
+            }
+        }
+        for key in ["rooms", "leads", "descriptions"] {
+            if let Some(m) = r.get(key) {
+                if !m.is_object() {
+                    return Err(format!("routing.{key} must be an object"));
+                }
+            }
+        }
+        if let Some(m) = r.get("rooms").and_then(Value::as_object) {
+            for (room, mode) in m {
+                if crate::proto::room_normalize(room).is_none() {
+                    return Err("routing.rooms keys must be room slugs".to_string());
+                }
+                if !matches!(mode.as_str(), Some("auto" | "lead")) {
+                    return Err("routing.rooms values must be \"auto\" or \"lead\"".to_string());
+                }
+            }
+        }
+        if let Some(m) = r.get("leads").and_then(Value::as_object) {
+            for name in m.values() {
+                if !name.as_str().is_some_and(crate::proto::agent_name_valid) {
+                    return Err("routing.leads values must be agent names".to_string());
+                }
+            }
+        }
+        if let Some(m) = r.get("model") {
+            let o = match m.as_object() {
+                Some(o) => o,
+                None => return Err("routing.model must be an object".to_string()),
+            };
+            for key in ["base_url", "model"] {
+                match o.get(key).and_then(Value::as_str) {
+                    Some(s) if !s.trim().is_empty() => {}
+                    _ => return Err(format!("routing.model.{key} is required")),
+                }
+            }
+            for key in ["api_key", "api_key_env"] {
+                if let Some(v) = o.get(key) {
+                    if !v.is_string() {
+                        return Err(format!("routing.model.{key} must be a string"));
+                    }
+                }
+            }
+        }
+    }
     for key in ["gray_bin", "gray_home", "workdir"] {
         let ok = data
             .get(key)

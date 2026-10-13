@@ -33,6 +33,17 @@ pub fn notify(event: Value) -> Value {
     json!({"method": "notify", "event": event})
 }
 
+/// Daemon→listener heartbeat: wire activity only, not an event. Keeps an
+/// idle `listen` connection inside the client's read timeout.
+pub fn heartbeat() -> Value {
+    notify(json!({"type": "ping"}))
+}
+
+/// True for heartbeat frames; clients treat them as activity, not events.
+pub fn is_heartbeat(v: &Value) -> bool {
+    v.pointer("/event/type").and_then(Value::as_str) == Some("ping")
+}
+
 /// Agent names: 1-64 chars of `[A-Za-z0-9_.-]` — they are also DM targets
 /// and room-member ids, so nothing whitespace-bearing gets through.
 pub fn agent_name_valid(s: &str) -> bool {

@@ -118,22 +118,35 @@ impl Client {
                 }
                 return Ok(v.get("result").cloned().unwrap_or(Value::Null));
             }
-            // Not our reply: a live push event.
-            self.events.push(v);
+            // Not our reply: a live push event. Heartbeats are keepalive
+            // traffic, not events.
+            if !proto::is_heartbeat(&v) {
+                self.events.push(v);
+            }
         }
     }
 
     /// Read one pushed event (blocking until IO_TIMEOUT). `Err` on timeout
-    /// or close; callers that stream just loop until Err.
+    /// or close; callers that stream just loop until Err. Heartbeat frames
+    /// reset the read deadline without surfacing as events.
     pub fn next_event(&mut self) -> Result<Value, String> {
-        let mut line = String::new();
-        let n = self
-            .reader
-            .read_line(&mut line)
-            .map_err(|_| "connection closed or timed out".to_string())?;
-        if n == 0 {
-            return Err("daemon closed the connection".to_string());
+        loop {
+            let mut line = String::new();
+            let n = self
+                .reader
+                .read_line(&mut line)
+                .map_err(|_| "connection closed or timed out".to_string())?;
+            if n == 0 {
+                return Err("daemon closed the connection".to_string());
+            }
+            let v: Value = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(_) => return Err("bad frame".to_string()),
+            };
+            if proto::is_heartbeat(&v) {
+                continue;
+            }
+            return Ok(v);
         }
-        serde_json::from_str(line.trim()).map_err(|_| "bad frame".to_string())
     }
 }

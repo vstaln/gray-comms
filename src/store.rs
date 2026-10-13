@@ -26,6 +26,8 @@ CREATE INDEX IF NOT EXISTS messages_dm ON messages(to_agent, delivered);
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Directory holding comms.sqlite — `None` for the in-memory store.
+    dir: Option<PathBuf>,
 }
 
 pub fn now_secs() -> f64 {
@@ -87,6 +89,7 @@ impl Store {
         conn.execute_batch(SCHEMA).map_err(map_err)?;
         Ok(Store {
             conn: Mutex::new(conn),
+            dir: path.parent().map(Path::to_path_buf),
         })
     }
 
@@ -96,7 +99,14 @@ impl Store {
         conn.execute_batch(SCHEMA).map_err(map_err)?;
         Ok(Store {
             conn: Mutex::new(conn),
+            dir: None,
         })
+    }
+
+    /// The directory holding comms.sqlite — the comms data dir (logs go
+    /// under it). `None` for in-memory stores.
+    pub fn data_dir(&self) -> Option<PathBuf> {
+        self.dir.clone()
     }
 
     /// Default location beside the config file.

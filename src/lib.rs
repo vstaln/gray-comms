@@ -11,6 +11,7 @@ pub mod config;
 pub mod daemon;
 pub mod doctor;
 pub mod proto;
+pub mod routing;
 pub mod service;
 pub mod setup;
 pub mod sidecar;

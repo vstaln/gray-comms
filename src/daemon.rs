@@ -26,6 +26,11 @@ pub struct Daemon {
     history_limit: u64,
     /// agent name → push channel, only while a `listen` connection lives.
     live: Mutex<HashMap<String, mpsc::Sender<String>>>,
+    /// "Who answers" routing (disabled = every room behaves as today).
+    routing: crate::routing::Routing,
+    /// routing-log directory under the comms data dir (`None` for tests
+    /// on the in-memory store).
+    log_dir: Option<std::path::PathBuf>,
 }
 
 type Reply = Result<Value, (String, String)>;
@@ -61,14 +66,37 @@ pub async fn serve_on(listener: TcpListener, config: &Value, store: Store) -> Re
         .and_then(Value::as_str)
         .filter(|t| !t.is_empty())
         .map(str::to_string);
+    let log_dir = store.data_dir().map(|d| d.join("routing-log"));
     let daemon = Arc::new(Daemon {
         store,
         token,
+        routing: crate::routing::Routing::from_config(config),
+        log_dir,
         history_limit: cfg_u64(config, "history_limit", 500),
         live: Mutex::new(HashMap::new()),
     });
     if let Ok(local) = listener.local_addr() {
         eprintln!("gray-comms listening on {local}");
+    }
+    // Heartbeat: an idle listener otherwise hits the client's IO timeout
+    // and drops, missing later pushes. Beat well under that timeout.
+    {
+        let d = daemon.clone();
+        let every =
+            std::time::Duration::from_millis(cfg_u64(config, "keepalive_ms", 5_000).max(50));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            tick.tick().await; // interval fires immediately; wait one out
+            loop {
+                tick.tick().await;
+                let line = proto::encode(&proto::heartbeat());
+                if let Ok(live) = d.live.lock() {
+                    for tx in live.values() {
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
+            }
+        });
     }
     loop {
         let (sock, peer) = match listener.accept().await {
@@ -230,11 +258,17 @@ fn join(
         for r in list.iter().filter_map(Value::as_str) {
             if let Some(room) = proto::room_normalize(r) {
                 if d.store.join_room(&room, name).map_err(internal)? {
-                    broadcast(d, &room, name, json!({
-                        "type": "member_joined",
-                        "room": room,
-                        "agent": name,
-                    }));
+                    broadcast(
+                        d,
+                        &room,
+                        name,
+                        json!({
+                            "type": "member_joined",
+                            "room": room,
+                            "agent": name,
+                        }),
+                        crate::routing::Targets::All,
+                    );
                 }
                 joined.push(room);
             }
@@ -259,20 +293,32 @@ fn leave(d: &Daemon, params: &Value, me: &str) -> Reply {
         if !d.store.leave_room(&room, me).map_err(internal)? {
             return Err(("not_member".to_string(), format!("not a member of {room}")));
         }
-        broadcast(d, &room, me, json!({
-            "type": "member_left",
-            "room": room,
-            "agent": me,
-        }));
+        broadcast(
+            d,
+            &room,
+            me,
+            json!({
+                "type": "member_left",
+                "room": room,
+                "agent": me,
+            }),
+            crate::routing::Targets::All,
+        );
         return Ok(json!({"left": [room]}));
     }
     let rooms = d.store.leave_all(me).map_err(internal)?;
     for room in &rooms {
-        broadcast(d, room, me, json!({
-            "type": "member_left",
-            "room": room,
-            "agent": me,
-        }));
+        broadcast(
+            d,
+            room,
+            me,
+            json!({
+                "type": "member_left",
+                "room": room,
+                "agent": me,
+            }),
+            crate::routing::Targets::All,
+        );
     }
     Ok(json!({"left": rooms}))
 }
@@ -283,11 +329,17 @@ fn join_room(d: &Daemon, params: &Value, me: &str) -> Reply {
     let room = proto::room_normalize(raw).ok_or_else(bad_room)?;
     let fresh = d.store.join_room(&room, me).map_err(internal)?;
     if fresh {
-        broadcast(d, &room, me, json!({
-            "type": "member_joined",
-            "room": room,
-            "agent": me,
-        }));
+        broadcast(
+            d,
+            &room,
+            me,
+            json!({
+                "type": "member_joined",
+                "room": room,
+                "agent": me,
+            }),
+            crate::routing::Targets::All,
+        );
     }
     Ok(json!({
         "room": room,
@@ -310,10 +362,20 @@ fn say(d: &Daemon, params: &Value, me: &str) -> Reply {
         .store
         .add_room_message(&room, me, text, d.history_limit)
         .map_err(internal)?;
-    broadcast(d, &room, me, json!({
-        "type": "room_message",
-        "message": msg,
-    }));
+    let members = d.store.room_members(&room).map_err(internal)?;
+    let targets = d
+        .routing
+        .route(&room, me, text, &members, d.log_dir.as_deref());
+    broadcast(
+        d,
+        &room,
+        me,
+        json!({
+            "type": "room_message",
+            "message": msg,
+        }),
+        targets,
+    );
     Ok(json!({"message": msg}))
 }
 
@@ -449,8 +511,9 @@ fn set_status(d: &Daemon, params: &Value, me: &str) -> Reply {
     Ok(json!({"status": status}))
 }
 
-/// Push an event to every live member except the sender.
-fn broadcast(d: &Daemon, room: &str, from: &str, event: Value) {
+/// Push an event to live members except the sender. `targets` narrows the
+/// recipient set for routed room messages; `All` is today's fan-out.
+fn broadcast(d: &Daemon, room: &str, from: &str, event: Value, targets: crate::routing::Targets) {
     let Ok(members) = d.store.room_members(room) else {
         return;
     };
@@ -459,6 +522,11 @@ fn broadcast(d: &Daemon, room: &str, from: &str, event: Value) {
         for m in members {
             if m == from {
                 continue;
+            }
+            if let crate::routing::Targets::Only(ref pick) = targets {
+                if !pick.iter().any(|p| p == &m) {
+                    continue;
+                }
             }
             if let Some(tx) = live.get(&m) {
                 let _ = tx.try_send(line.clone());
