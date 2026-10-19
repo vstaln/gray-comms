@@ -448,10 +448,33 @@ where
     }
 }
 
+fn private_header_file(header: &str) -> Option<(PathBuf, String)> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("gray-hdr-{}-{nanos:x}", std::process::id()));
+    let mut o = std::fs::OpenOptions::new();
+    o.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    match o.open(&path).and_then(|mut f| f.write_all(header.as_bytes())) {
+        Ok(()) => Some((path.clone(), format!("@{}", path.display()))),
+        Err(_) => {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+}
+
 /// POST a tiny OpenAI-Responses request through `curl`. The body goes on
 /// stdin so message text never appears in the process list; `timeout` is
 /// a hard total budget (`--max-time`). Any failure maps to a scrubbed
-/// `Fail` the caller turns into the open outcome.
+/// `Fail` the caller turns into the open outcome. The Authorization header
+/// rides in a 0600 tempfile (`-H @file`) for the same reason.
 fn curl_call(spec: &ModelSpec, prompt: &str, timeout: Duration) -> Result<String, Fail> {
     let body = json!({
         "model": spec.model,
@@ -476,17 +499,33 @@ fn curl_call(spec: &ModelSpec, prompt: &str, timeout: Duration) -> Result<String
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
+    let mut hdr_file = None;
     if let Some(key) = spec.api_key() {
-        cmd.arg("-H")
-            .arg(format!("Authorization: Bearer {key}"));
+        let h = format!("Authorization: Bearer {key}");
+        let arg = match private_header_file(&h) {
+            Some((p, a)) => {
+                hdr_file = Some(p);
+                a
+            }
+            None => h,
+        };
+        cmd.arg("-H").arg(arg);
     }
-    let mut child = cmd.spawn().map_err(|_| Fail::new("unavailable"))?;
+    let spawned = cmd.spawn();
+    if spawned.is_err() {
+        if let Some(p) = &hdr_file {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    let mut child = spawned.map_err(|_| Fail::new("unavailable"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(body.to_string().as_bytes());
     }
-    let out = child
-        .wait_with_output()
-        .map_err(|_| Fail::new("transport"))?;
+    let res = child.wait_with_output();
+    if let Some(p) = &hdr_file {
+        let _ = std::fs::remove_file(p);
+    }
+    let out = res.map_err(|_| Fail::new("transport"))?;
     if !out.status.success() {
         let reason = if out.status.code() == Some(28) {
             "timeout"
