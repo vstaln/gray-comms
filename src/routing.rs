@@ -16,7 +16,6 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -526,23 +525,31 @@ fn append_row(dir: &Path, row: &Value) {
         return;
     };
     line.push('\n');
-    if std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .is_err()
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    if b.create(dir).is_err() {
         return;
     }
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .open(&path)
-    else {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let Ok(mut f) = opts.open(&path) else {
         return;
     };
-    let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
     let _ = f.write_all(line.as_bytes());
 }
 
@@ -760,6 +767,10 @@ mod tests {
         assert_eq!(row["ok"], true);
         assert_eq!(row["choice"], "bea");
         assert!(!text.contains("super secret"));
-        assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 }

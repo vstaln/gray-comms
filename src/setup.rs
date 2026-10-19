@@ -52,6 +52,7 @@ impl Prompter for Tty {
 /// Echo off for one read. Ctrl-C would otherwise kill setup with the
 /// terminal still silent, so SIGINT restores it first (tcsetattr is
 /// async-signal-safe).
+#[cfg(unix)]
 fn without_echo<T>(read: impl FnOnce() -> T) -> T {
     static SAVED: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
     extern "C" fn restore_and_exit(_: libc::c_int) {
@@ -78,6 +79,13 @@ fn without_echo<T>(read: impl FnOnce() -> T) -> T {
         libc::signal(libc::SIGINT, old);
     }
     out
+}
+
+/// No portable no-echo read in std (needs a console API); on non-unix the
+/// prompt still works, the input just echoes.
+#[cfg(not(unix))]
+fn without_echo<T>(read: impl FnOnce() -> T) -> T {
+    read()
 }
 
 /// Resolve the gray binary (`GRAY_BIN` env or `PATH` lookup).
