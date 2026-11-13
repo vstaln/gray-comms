@@ -222,6 +222,15 @@ pub(crate) fn send_tool(
                 if !why.starts_with("no live session matches") {
                     return Err(why);
                 }
+                if let Ok(id) = crate::session::find_known(config, &raw) {
+                    let sent = crate::deliver::send(gray_bin, &id, mesh, mode, &text)?;
+                    return Ok(format!(
+                        "sent as {} from {mesh}: {id} (not live) {} id {}",
+                        mode.label(),
+                        sent.state,
+                        sent.id.chars().take(8).collect::<String>()
+                    ));
+                }
                 if !crate::proto::agent_name_valid(raw.trim()) {
                     return Err(why);
                 }

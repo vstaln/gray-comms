@@ -402,9 +402,28 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                 crate::session::collect(&config, &me, tail.unwrap_or(3) as usize, dir.as_deref());
             let shown: Vec<&crate::session::View> =
                 views.iter().filter(|v| *all || v.status.fresh()).collect();
+            let live_ids: Vec<String> = shown.iter().map(|v| v.id.clone()).collect();
+            let queued: Vec<(String, usize)> = crate::session::pending_inboxes(&config)
+                .into_iter()
+                .filter(|(id, _)| !live_ids.iter().any(|l| l == id))
+                .collect();
             if *json {
-                let rows: Vec<Value> = shown.iter().map(|v| view_json(v)).collect();
-                println!("{}", json!({"self": me, "mesh": mesh, "sessions": rows}));
+                let rows: Vec<Value> = shown
+                    .iter()
+                    .map(|v| {
+                        let mut row = view_json(v);
+                        row["pending_mail"] = json!(crate::session::pending_mail(&config, &v.id));
+                        row
+                    })
+                    .collect();
+                let pending: Vec<Value> = queued
+                    .iter()
+                    .map(|(id, n)| json!({"id": id, "pending_mail": n}))
+                    .collect();
+                println!(
+                    "{}",
+                    json!({"self": me, "mesh": mesh, "sessions": rows, "pending": pending})
+                );
                 return Ok(());
             }
             println!(
@@ -414,13 +433,19 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                 if mesh.is_empty() { "unjoined" } else { &mesh }
             );
             for v in &shown {
+                let mail = crate::session::pending_mail(&config, &v.id);
                 println!(
-                    "• {} {} · {} · {}{} · pid {} · {}",
+                    "• {} {} · {} · {}{}{} · pid {} · {}",
                     v.short,
                     v.status.label(),
                     v.short_model(),
                     v.cwd_short(),
                     if v.me { " · self" } else { "" },
+                    if mail > 0 {
+                        format!(" · {mail} mail")
+                    } else {
+                        String::new()
+                    },
                     v.pid
                         .map(|p| p.to_string())
                         .unwrap_or_else(|| "?".to_string()),
@@ -433,6 +458,17 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                 for l in &v.tail {
                     println!("  {} {} {}", l.clock, l.glyph.ch(), l.text);
                 }
+            }
+            for (id, n) in queued.iter().take(5) {
+                println!(
+                    "• {id} not live · {n} queued message(s) · delivered when that session resumes"
+                );
+            }
+            if queued.len() > 5 {
+                println!(
+                    "…and {} more session(s) holding queued mail",
+                    queued.len() - 5
+                );
             }
             Ok(())
         }

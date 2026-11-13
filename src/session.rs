@@ -151,6 +151,42 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
+pub fn inbox_dir(config: &Value, id: &str) -> PathBuf {
+    home(config).join("cron").join("inbox").join(id)
+}
+
+pub fn pending_mail(config: &Value, id: &str) -> usize {
+    let Ok(rd) = std::fs::read_dir(inbox_dir(config, id)) else {
+        return 0;
+    };
+    rd.flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.ends_with(".json") && !name.starts_with('.')
+        })
+        .count()
+}
+
+pub fn pending_inboxes(config: &Value) -> Vec<(String, usize)> {
+    let root = home(config).join("cron").join("inbox");
+    let Ok(rd) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, usize)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let id = e.file_name().to_string_lossy().into_owned();
+            if !e.path().is_dir() {
+                return None;
+            }
+            let n = pending_mail(config, &id);
+            (n > 0).then_some((id, n))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 pub fn tilde(path: &str) -> String {
     let home = user_home();
     let home = home.to_string_lossy();
@@ -565,6 +601,39 @@ pub fn find<'a>(views: &'a [View], raw: &str) -> Result<&'a View, String> {
     }
     let list: Vec<String> = by_id.iter().map(|v| v.id.clone()).collect();
     Err(format!("ambiguous target \"{raw}\": {}", list.join(", ")))
+}
+
+pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("no session matches an empty target".to_string());
+    }
+    let Ok(rd) = std::fs::read_dir(root(config)) else {
+        return Err(format!("no session matches \"{raw}\""));
+    };
+    let mut ids: Vec<String> = rd
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".jsonl").map(str::to_string)
+        })
+        .filter(|id| id.starts_with(raw))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    match ids.len() {
+        1 => Ok(ids.remove(0)),
+        0 => Err(format!("no session matches \"{raw}\"")),
+        _ => Err(format!(
+            "\"{raw}\" matches {} sessions: {}",
+            ids.len(),
+            ids.iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(", ")
+        )),
+    }
 }
 
 pub fn short_for(config: &Value, id: &str) -> String {
