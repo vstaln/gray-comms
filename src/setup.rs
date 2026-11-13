@@ -227,9 +227,7 @@ pub fn run(path: &Path, io: &mut dyn Prompter) -> Result<bool, String> {
         return Err("Mesh name must be 1-64 chars of [A-Za-z0-9_.-]".to_string());
     }
 
-    let lan = io.confirm(
-        "Listen on the LAN (other machines reach this daemon)? [y/N] ",
-    )?;
+    let lan = io.confirm("Listen on the LAN (other machines reach this daemon)? [y/N] ")?;
     let bind = if lan { "0.0.0.0" } else { "127.0.0.1" };
 
     let prior_port = prior
@@ -261,9 +259,8 @@ pub fn run(path: &Path, io: &mut dyn Prompter) -> Result<bool, String> {
     // LAN without a token lets anyone who can reach the port read the mesh.
     let mut token = String::new();
     if lan {
-        let answer = io.prompt(
-            "Shared token for LAN joins (blank generates one; it goes in the config): ",
-        )?;
+        let answer =
+            io.prompt("Shared token for LAN joins (blank generates one; it goes in the config): ")?;
         token = if answer.trim().is_empty() {
             gen_token()
         } else {
@@ -274,12 +271,16 @@ pub fn run(path: &Path, io: &mut dyn Prompter) -> Result<bool, String> {
         }
     }
 
-    let workdir = path
-        .parent()
-        .map(|p| absolutize(p).to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".".to_string());
+    let workdir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| path.parent().map(absolutize))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .into_owned();
     let mut saved = json!({
         "name": name,
+        "identity": "session",
         "bind": bind,
         "host": "127.0.0.1",
         "port": port,

@@ -37,8 +37,17 @@ Goal: every running Gray session knows what the others are doing and can message
 
 Rules: cargo only on maid; no new code comments; no unit tests; explicit enums for modes; `git commit --no-verify`.
 
-## Open questions (answered by the Gray core research)
+## Answers from the Gray core research
 
-- Where the live-session registry lives and how `gray read` finds busy/idle.
-- How `gray send` lands: mid-turn after a tool call, at turn end, or next prompt; what happens to an idle session.
-- Whether a plugin can see its own session id (env var) and whether `prompt/context` fires mid-turn or only per prompt.
+- **Registry**: `<gray_home>/sessions/` — `<id>.jsonl` (header: id, timestamp, cwd, model, origin) plus `<id>.open`, live iff the lock is held (`gray/src/session_store/open_lock.rs:62-102`). `gray read --live` is the gateway plugin's `session read` (`gray/main.rs:133-150` → `gray-gateway/src/session/read.rs:36-92`): pid from the `.open` holder, cwd/model from the header line, last activity from the transcript mtime.
+- **Busy/idle** is not persisted. `SessionEnd {Done, ToolUse, ToolResult, UserUnanswered}` comes from the last transcript entry (`session_store/scan.rs:87-97`) and `SessionState {Done, Interrupted, Running}` (`resume.rs:99-118`) where `Running` only means the process is alive. A peer reads busy as: live ∧ last entry not a finished assistant turn.
+- **`gray send`**: a file mailbox (`<home>/cron/inbox/<id>/<ms>-<uuid>.json`, gateway `session/send.rs:66-93`) drained by the target. Interactive sessions wake every 2 s (`repl/mod.rs:958-971`), turn the entry into a prompt and start a turn; mid-turn the steer hook (`prompt_turn.rs:169-179` → `session_send.rs:171-197`) is polled before every model call (`gray-core/src/agent_loop.rs:544-560`). `-p` sessions drain only at the start of a `--resume` run (`print.rs:1188-1204`), so a message to a print session waits for its next resume.
+- **Identity**: every hook/tool call carries `session {id, cwd, model?}` (`gray-plugin/src/sidecar.rs:63-69`); the sidecar process also inherits `GRAY_SESSION_ID`, `GRAY_SESSION_ORIGIN`, `GRAY_HOME`, `GRAY_MODEL`.
+- **`prompt/context` fires once per turn, before the first model call** (`agent_loop.rs:513-532`), wrapped as `[Context update]` and skipped when an identical injected message already exists (`:520-530`). It cannot fire mid-turn; per-model-call alternatives are `context/build`, `tool/before`, `tool/after`.
+
+## Deviations from this plan (as built)
+
+- `comms_send` takes `mode: "message" | "kickstart"` instead of a boolean `kickstart`, because modes are one explicit enum here.
+- A message to a busy **`-p`** session cannot land mid-turn: Gray print sessions drain mail only when resumed (core limitation above). Interactive sessions do steer mid-turn. The phase-4 check uses an interactive-style target where the behaviour is real and documents the print case.
+- The awareness block is not gated by a *changed* hash alone: core already drops identical `[Context update]` text, so the plugin keeps a per-session seen-hash to stay token-frugal and core's dedupe is the second net.
+- Phase 1: `workdir` no longer defaults to the config directory (a deleted `/tmp` path broke it); setup writes `$HOME` and an explicit `identity: "session"`. The machine prefix is `vstaln`, not the e2e leftover `gray-e2e`.

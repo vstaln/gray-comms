@@ -5,6 +5,53 @@ fn check(pass: bool, what: &str, detail: &str) -> bool {
     pass
 }
 
+enum Daemon {
+    Up { addr: String },
+    Down { why: String },
+}
+
+fn daemon_mode(config: &Value) -> Daemon {
+    let addr = crate::config::connect_addr(config);
+    let mut why = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        match crate::client::Client::connect(config) {
+            Ok(mut client) => match client.call("ping", json!({})) {
+                Ok(_) => return Daemon::Up { addr },
+                Err(e) => why = format!("{addr} answered join but not ping: {e}"),
+            },
+            Err(e) => why = e,
+        }
+    }
+    Daemon::Down { why }
+}
+
+fn live_push_ok(config: &Value) -> bool {
+    let watcher = format!("comms-doctor-{}", std::process::id());
+    let Ok(mut listener) = crate::client::Client::connect_as(config, &watcher) else {
+        return false;
+    };
+    if listener.listen().is_err() {
+        return false;
+    }
+    let Ok(mut other) = crate::client::Client::connect_as(config, &format!("{watcher}-q")) else {
+        return false;
+    };
+    let Ok(who) = other.call("who", json!({})) else {
+        return false;
+    };
+    who.pointer("/agents")
+        .and_then(Value::as_array)
+        .is_some_and(|agents| {
+            agents.iter().any(|a| {
+                a.get("name").and_then(Value::as_str) == Some(watcher.as_str())
+                    && a.get("status").and_then(Value::as_str) != Some("offline")
+            })
+        })
+}
+
 pub fn doctor(config: &Value) -> Result<(), String> {
     let gray_bin = config.get("gray_bin").and_then(Value::as_str).unwrap_or("");
     let mut ok = check(
@@ -17,11 +64,24 @@ pub fn doctor(config: &Value) -> Result<(), String> {
         },
     );
 
-    let mut client = crate::client::Client::connect(config)?;
-    client
-        .call("ping", json!({}))
-        .map_err(|e| format!("daemon answered join but not ping: {e}"))?;
-    ok &= check(true, "daemon", "join and ping verified");
+    let daemon = daemon_mode(config);
+    match &daemon {
+        Daemon::Up { addr } => {
+            ok &= check(
+                true,
+                "daemon mode",
+                &format!("up at {addr} (rooms, cross-reboot history, LAN)"),
+            );
+            ok &= check(
+                live_push_ok(config),
+                "live push",
+                "a listener joined with listen and shows online",
+            );
+        }
+        Daemon::Down { why } => {
+            println!("• daemon mode — down ({why}); local run: crew, the block and send");
+        }
+    }
 
     let root = crate::session::root(config);
     let live = crate::session::live_ids(config);
