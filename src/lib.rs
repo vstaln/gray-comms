@@ -13,6 +13,8 @@ pub mod config;
 pub mod daemon;
 pub mod deliver;
 pub mod doctor;
+pub mod foreign;
+pub mod harness;
 pub mod identity;
 pub mod presence;
 pub mod proto;

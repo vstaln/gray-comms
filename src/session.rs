@@ -86,11 +86,7 @@ impl View {
             .next()
             .unwrap_or(&self.model)
             .to_string();
-        if m.is_empty() {
-            "?".to_string()
-        } else {
-            m
-        }
+        if m.is_empty() { "?".to_string() } else { m }
     }
 
     pub fn recap(&self) -> String {
@@ -99,6 +95,13 @@ impl View {
             (false, true) => self.want.clone(),
             (true, false) => self.did.clone(),
             (true, true) => String::new(),
+        }
+    }
+
+    pub fn harness(&self) -> Option<&str> {
+        match self.origin.as_str() {
+            "claude" | "codex" | "opencode" => Some(self.origin.as_str()),
+            _ => None,
         }
     }
 
@@ -556,6 +559,25 @@ pub fn collect(config: &Value, me: &str, tail: usize, dir: Option<&str>) -> Vec<
         v.tail = v.tail.split_off(v.tail.len().saturating_sub(tail));
         views.push(v);
     }
+    for mut v in crate::foreign::views(config, tail) {
+        if let Some(d) = &dir {
+            let hay = format!("{} {}", v.cwd.to_lowercase(), tilde(&v.cwd).to_lowercase());
+            if !hay.contains(d.as_str()) {
+                continue;
+            }
+        }
+        v.me = v.id == me;
+        v.claim = crate::claim::label(config, &v.id);
+        views.push(v);
+    }
+    let union: Vec<String> = views.iter().map(|v| v.id.clone()).collect();
+    let all_short = shorts(&union);
+    for v in &mut views {
+        if let Some(s) = all_short.get(&v.id) {
+            v.short = s.clone();
+        }
+        v.tail = v.tail.split_off(v.tail.len().saturating_sub(tail));
+    }
     views.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then(a.id.cmp(&b.id)));
     views
 }
@@ -591,7 +613,7 @@ pub fn find<'a>(views: &'a [View], raw: &str) -> Result<&'a View, String> {
             0 => {
                 return Err(format!(
                     "no live session matches \"{raw}\" (targets: id prefix, pid, cwd substring)"
-                ))
+                ));
             }
             _ => {
                 let list: Vec<String> = by_cwd

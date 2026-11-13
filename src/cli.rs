@@ -41,7 +41,12 @@ pub enum Command {
     Status,
     Stop,
     Restart,
-    Doctor,
+    Doctor {
+        /// Repair what can be repaired: config keys, state dirs, plugin
+        /// registration, the crew alias, and a stopped service.
+        #[arg(long)]
+        fix: bool,
+    },
     Uninstall,
     /// Join a room as the configured agent.
     Join {
@@ -110,6 +115,23 @@ pub enum Command {
         /// Session to attach the claim to (default: this session).
         #[arg(long)]
         session: Option<String>,
+    },
+    /// Fed by a harness hook (Claude Code, Codex, OpenCode): records presence
+    /// and prints the awareness block plus any mail waiting for this session.
+    #[command(hide = true)]
+    Hook {
+        #[arg(long, default_value = "claude")]
+        harness: String,
+    },
+    /// Merge the comms hook into Claude Code, Codex and OpenCode configs and
+    /// install the `crew` alias.
+    InstallHook {
+        /// claude, codex, opencode, or all (default).
+        #[arg(long)]
+        harness: Option<String>,
+        /// Remove the hooks and the alias instead.
+        #[arg(long)]
+        uninstall: bool,
     },
     /// Stream live events (room messages, DMs, joins/leaves) until Ctrl-C.
     Listen {
@@ -213,6 +235,13 @@ fn ago(secs: u64) -> String {
     }
 }
 
+fn pending_of(config: &Value, v: &crate::session::View) -> usize {
+    match v.harness() {
+        Some(_) => crate::foreign::mail_count(config, &v.id),
+        None => crate::session::pending_mail(config, &v.id),
+    }
+}
+
 fn view_json(v: &crate::session::View) -> Value {
     json!({
         "id": v.id,
@@ -224,6 +253,7 @@ fn view_json(v: &crate::session::View) -> Value {
         "origin": v.origin,
         "status": v.status.label(),
         "claim": v.claim,
+        "harness": v.harness(),
         "fresh": v.status.fresh(),
         "idle_secs": v.idle_secs,
         "recap": v.recap(),
@@ -397,8 +427,14 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Doctor => {
+        Command::Doctor { fix } => {
             let config = crate::config::load_config(config_path)?;
+            if *fix {
+                for line in crate::doctor::repairs(&config, config_path)? {
+                    println!("fixed: {line}");
+                }
+                println!();
+            }
             crate::doctor::doctor(&config)
         }
         Command::Crew {
@@ -424,7 +460,7 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                     .iter()
                     .map(|v| {
                         let mut row = view_json(v);
-                        row["pending_mail"] = json!(crate::session::pending_mail(&config, &v.id));
+                        row["pending_mail"] = json!(pending_of(&config, v));
                         row
                     })
                     .collect();
@@ -445,11 +481,15 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                 if mesh.is_empty() { "unjoined" } else { &mesh }
             );
             for v in &shown {
-                let mail = crate::session::pending_mail(&config, &v.id);
+                let mail = pending_of(&config, v);
                 println!(
-                    "• {} {} · {} · {}{}{} · pid {} · {}",
+                    "• {} {} · {}{} · {}{}{} · pid {} · {}",
                     v.short,
                     v.status.label(),
+                    match v.harness() {
+                        Some(h) => format!("{h} · "),
+                        None => String::new(),
+                    },
                     v.short_model(),
                     v.cwd_short(),
                     if v.me { " · self" } else { "" },
@@ -507,6 +547,15 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                 crate::sidecar::send_tool(&config, &Some(me), &mesh, &args)?
             );
             Ok(())
+        }
+        Command::Hook { harness } => {
+            let config = crate::config::load_config(config_path)?;
+            println!("{}", crate::harness::hook(&config, harness)?);
+            Ok(())
+        }
+        Command::InstallHook { harness, uninstall } => {
+            let config = crate::config::load_config(config_path)?;
+            crate::harness::install(&config, harness.as_deref(), !*uninstall)
         }
         Command::Claim {
             text,

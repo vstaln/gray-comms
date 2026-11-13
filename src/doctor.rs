@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::path::Path;
 
 fn check(pass: bool, what: &str, detail: &str) -> bool {
     println!("{} {what} — {detail}", if pass { "✓" } else { "✗" });
@@ -50,6 +51,84 @@ fn live_push_ok(config: &Value) -> bool {
                     && a.get("status").and_then(Value::as_str) != Some("offline")
             })
         })
+}
+
+pub fn repairs(config: &Value, config_path: &Path) -> Result<Vec<String>, String> {
+    let mut done: Vec<String> = Vec::new();
+    let mut doc: Value = std::fs::read(config_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut dirty = false;
+    if doc.get("identity").and_then(Value::as_str).is_none() {
+        doc["identity"] = serde_json::json!("session");
+        dirty = true;
+    }
+    let home = crate::session::home(config);
+    if doc.get("gray_home").and_then(Value::as_str).is_none() {
+        doc["gray_home"] = serde_json::json!(home.display().to_string());
+        dirty = true;
+    }
+    if doc.get("workdir").and_then(Value::as_str).is_none() {
+        doc["workdir"] =
+            serde_json::json!(std::env::var("HOME").unwrap_or_else(|_| "/".to_string()));
+        dirty = true;
+    }
+    if doc.get("gray_bin").and_then(Value::as_str).is_none() {
+        doc["gray_bin"] = serde_json::json!(crate::harness::exe());
+        dirty = true;
+    }
+    if dirty {
+        crate::config::atomic_json(config_path, &doc)
+            .map_err(|e| format!("cannot rewrite {}: {e}", config_path.display()))?;
+        done.push(format!("config keys in {}", config_path.display()));
+    }
+    for sub in ["comms/seen", "comms/claims", "comms/foreign"] {
+        let d = home.join(sub);
+        if !d.is_dir() {
+            std::fs::create_dir_all(&d)
+                .map_err(|e| format!("cannot create {}: {e}", d.display()))?;
+            done.push(d.display().to_string());
+        }
+    }
+    let fresh = crate::config::load_config(config_path)?;
+    let lock = home.join("plugins/lock.json");
+    let before = lock_hash(&lock);
+    match crate::cli::register(&fresh, config_path) {
+        Ok(()) => {}
+        Err(e) => return Err(format!("cannot register: {e}")),
+    }
+    if lock_hash(&lock) != before {
+        done.push("plugin registration and manifest cache".to_string());
+    }
+    let hooks_before = crate::harness::installed();
+    if crate::harness::install(&fresh, Some("all"), true).is_ok() {
+        if hooks_before.len() != 3 {
+            done.push("harness hooks and the crew alias".to_string());
+        }
+    }
+    if crate::service::installed(config_path) {
+        let up = crate::service::status(config_path)
+            .map(|s| !s.contains("down"))
+            .unwrap_or(false);
+        if !up {
+            crate::service::restart(config_path)?;
+            done.push("service restarted".to_string());
+        }
+    }
+    Ok(done)
+}
+
+fn lock_hash(path: &Path) -> u64 {
+    let Ok(raw) = std::fs::read(path) else {
+        return 0;
+    };
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in raw {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
 }
 
 pub fn doctor(config: &Value) -> Result<(), String> {
@@ -166,6 +245,29 @@ pub fn doctor(config: &Value) -> Result<(), String> {
             "{} (enabled: {enabled}, global: {global} — the hook runs in lean sessions too)",
             lock.display()
         ),
+    );
+
+    let hooks = crate::harness::installed();
+    println!(
+        "• harness hooks — {} ({}; `gray-comms install-hook` adds the rest)",
+        if hooks.is_empty() {
+            "none".to_string()
+        } else {
+            hooks.join(", ")
+        },
+        "Claude Code, Codex and OpenCode sessions join the same block"
+    );
+    let link = crate::harness::alias_path();
+    let linked = std::fs::read_link(&link)
+        .map(|t| t == std::path::Path::new(&crate::harness::exe()))
+        .unwrap_or(false);
+    println!(
+        "• crew alias — {}",
+        if linked {
+            format!("{}", link.display())
+        } else {
+            format!("missing; `gray-comms install-hook` writes it")
+        }
     );
 
     if ok {

@@ -51,6 +51,27 @@ them mid-turn — no room, no registration, nothing to call.
   `gray send` inbox: a `· 2 mail` badge on live rows, and a `not live ·
   N queued message(s)` footer for sessions that are not running.
 
+## Other harnesses
+
+`gray-comms install-hook` writes one hook into Claude Code
+(`~/.claude/settings.json`, `SessionStart` + `UserPromptSubmit`), one into
+`~/.codex/hooks.json`, one plugin file into
+`~/.config/opencode/plugins/gray-comms.js`, and the `crew` symlink into
+`~/.local/bin`. It merges and is idempotent; `--uninstall` takes them back
+out.
+
+Those hooks call `gray-comms hook --harness <name>`, which reads the
+harness's own hook JSON on stdin, records the session (cwd, transcript,
+harness), prints the same awareness block a Gray session gets, and drains
+any messages waiting for it. Claude Code and Codex read that stdout as
+context, so a Claude Code session sees the Gray sessions and can message
+them with `crew send <target> "…"`; messages to it are queued in
+`~/.gray/comms/foreign/` and delivered on its next hook call (`--ttl`,
+default 24 h, drops stale ones). Status, recap and tail come from the
+harness's transcript, read-only. Liveness is a process of that harness
+running in the session's cwd, so a finished `claude -p` session drops out of
+`crew` by itself.
+
 ## Runs without the daemon
 
 The daemon is optional. Everything that is about *sessions on this machine*
@@ -151,11 +172,13 @@ history still records the message for everyone:
 
 ## Tools
 
-- `comms_send {to?, text, all?, mode?}` — message another live session by
-  short id, id prefix, pid or cwd substring, or every other session with
+- `comms_send {to?, text, all?, mode?, ttl?}` — message another live session
+  by short id, id prefix, pid or cwd substring, or every other session with
   `all:true`. Delivery is one `gray send`, so it lands mid-turn and is
   exactly-once; `mode:"kickstart"` frames the text as a directive. A target
-  that is no live session falls back to a mesh DM queued in the daemon.
+  that is no live session falls back to a mesh DM queued in the daemon; a
+  Claude Code / Codex / OpenCode target gets it queued for its next hook
+  call with `ttl` (default 24h).
 - `comms_status {text?, action?}` — claim what you are working on, or
   `action:"clear"`; visible in every other session's block for 30 minutes
 - `comms_join {room?, status?}` — subscribe a room (presence is automatic)
@@ -194,8 +217,11 @@ gray-comms crew [--json] [--tail N] [--dir DIR] [--all]   # live sessions
 gray-comms send "hold off src/x.rs" --to vorti [-k]       # message a session
 gray-comms send "deploying now" --all                     # every other session
 gray-comms claim "editing src/session.rs"                 # claim work (30 min)
+gray-comms install-hook [--harness claude|codex|opencode|all] [--uninstall]
+gray-comms doctor --fix                                   # repair what it can
 gray-comms claim --clear                                  # drop the claim
 gray-comms send "…" --to <stopped session id>             # queues for resume
 ```
 
-`gray comms <verb>` is the same CLI inside a Gray shell.
+`gray comms <verb>` is the same CLI inside a Gray shell, and `crew` (installed
+by `install-hook`) is a short alias of `gray-comms crew`.

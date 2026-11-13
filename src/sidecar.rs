@@ -1,6 +1,6 @@
 //! NDJSON protocol 1.1 sidecar.
 //! Manifest answers without config; a down daemon fails fast and safe.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -61,7 +61,8 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
                         "to": {"type": "string", "description": "Target: live session short id or prefix, pid, cwd substring, or mesh agent name"},
                         "text": {"type": "string", "description": "Message text (plain, one screen at most)"},
                         "all": {"type": "boolean", "description": "Send to every other live session"},
-                        "mode": {"type": "string", "enum": ["message", "kickstart"], "description": "message (default) lands as context the target may act on; kickstart frames it as a directive the target acts on now"}
+                        "mode": {"type": "string", "enum": ["message", "kickstart"], "description": "message (default) lands as context the target may act on; kickstart frames it as a directive the target acts on now"},
+                        "ttl": {"type": "string", "description": "How long queued mail waits for a target that is not running (default 24h; e.g. 90m, 7d)"}
                     },
                     "required": ["text"]
                 }
@@ -182,6 +183,27 @@ fn tool_call(name: &str, params: &Value, config_path: &Path) -> Value {
     }
 }
 
+pub(crate) fn ttl_secs(raw: Option<&str>) -> Result<u64, String> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(crate::foreign::MAIL_TTL_SECS);
+    };
+    let (num, mult) = match raw.chars().last() {
+        Some('s') => (&raw[..raw.len() - 1], 1),
+        Some('m') => (&raw[..raw.len() - 1], 60),
+        Some('h') => (&raw[..raw.len() - 1], 3600),
+        Some('d') => (&raw[..raw.len() - 1], 86_400),
+        _ => (raw, 1),
+    };
+    let n: u64 = num
+        .trim()
+        .parse()
+        .map_err(|_| format!("\"ttl\" must look like 90s, 30m, 24h or 7d, not \"{raw}\""))?;
+    if n == 0 {
+        return Err("\"ttl\" must be at least 1 second".to_string());
+    }
+    Ok(n.saturating_mul(mult))
+}
+
 pub(crate) fn status_tool(
     config: &Value,
     session: &Option<String>,
@@ -256,6 +278,23 @@ pub(crate) fn send_tool(
             ))
         }
         Target::One(raw) => match crate::session::find(&views, &raw) {
+            Ok(v) if v.harness().is_some() => {
+                let ttl = ttl_secs(args.get("ttl").and_then(Value::as_str))?;
+                let queued = crate::foreign::queue(
+                    config,
+                    &v.id,
+                    &format!("↳ from {mesh}\n{}", mode.payload(&text)),
+                    ttl,
+                )?;
+                Ok(format!(
+                    "sent as {} from {mesh}: {} ({}) queued for its next hook call ({} message(s) waiting, ttl {}m)",
+                    mode.label(),
+                    v.short,
+                    v.id,
+                    queued,
+                    ttl / 60
+                ))
+            }
             Ok(v) => {
                 let sent = crate::deliver::send(gray_bin, &v.id, mesh, mode, &text)?;
                 Ok(format!(

@@ -1,19 +1,29 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
-use crate::session::{short_for, tilde, View};
+use crate::session::{View, short_for, tilde};
 
 pub const MAX_CHARS: usize = 1200;
 pub const MAX_SESSIONS: usize = 6;
 
 fn entry_head(v: &View) -> String {
-    format!(
-        "• {} {} · {} · {}",
-        v.short,
-        v.status.label(),
-        v.short_model(),
-        tilde(&v.cwd)
-    )
+    match v.harness() {
+        Some(h) => format!(
+            "• {} {} · {} · {} · {}",
+            v.short,
+            v.status.label(),
+            h,
+            v.short_model(),
+            tilde(&v.cwd)
+        ),
+        None => format!(
+            "• {} {} · {} · {}",
+            v.short,
+            v.status.label(),
+            v.short_model(),
+            tilde(&v.cwd)
+        ),
+    }
 }
 
 fn entry_recap(v: &View) -> Option<String> {
@@ -57,7 +67,7 @@ pub fn block(config: &Value, me_id: &str, tail: usize, dir: Option<&str>) -> Opt
         .map(|v| v.short.clone())
         .unwrap_or_else(|| short_for(config, me_id));
     let header = format!(
-        "comms: {} other Gray session(s) live. Check them before overlapping work; `gray-comms crew` for the full view.",
+        "comms: {} other session(s) live. Check them before overlapping work; `gray-comms crew` for the full view.",
         others.len()
     );
     let mut lines: Vec<String> = vec![header];
