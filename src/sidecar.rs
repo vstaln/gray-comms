@@ -11,6 +11,7 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
         "version": env!("CARGO_PKG_VERSION"),
         "protocol": "1.1",
         "commands": ["/comms"],
+        "command_descriptions": {"/comms": "message other agents on the comms mesh"},
         "hooks": ["prompt/context"],
         "tools": [
             {
