@@ -50,4 +50,11 @@ Rules: cargo only on maid; no new code comments; no unit tests; explicit enums f
 - `comms_send` takes `mode: "message" | "kickstart"` instead of a boolean `kickstart`, because modes are one explicit enum here.
 - A message to a busy **`-p`** session cannot land mid-turn: Gray print sessions drain mail only when resumed (core limitation above). Interactive sessions do steer mid-turn. The phase-4 check uses an interactive-style target where the behaviour is real and documents the print case.
 - The awareness block is not gated by a *changed* hash alone: core already drops identical `[Context update]` text, so the plugin keeps a per-session seen-hash to stay token-frugal and core's dedupe is the second net.
+- A `gray -p` session is never idle while alive (it exits when its turn ends), so the phase-2 check pairs one `-p` (busy) with one `gray --stdio` (idle) throwaway instead of two `-p` sessions.
 - Phase 1: `workdir` no longer defaults to the config directory (a deleted `/tmp` path broke it); setup writes `$HOME` and an explicit `identity: "session"`. The machine prefix is `vstaln`, not the e2e leftover `gray-e2e`.
+
+## Phase checks (as run on this laptop)
+
+**1 — cleanup.** `gray-comms doctor` all green: gray binary, `daemon mode up at 127.0.0.1:19876`, `live push` listener online, session store 9 live and matching `gray read --live`, identity `session (prefix vstaln): this session joins as vstaln.unita`, block 1091 chars, state dir, registration enabled+global. alice/bob purged from `comms.sqlite` (agents 23 → 21).
+
+**2 — identity + presence.** Two throwaways in `/tmp/gc-throw`: `isothermal-photon-sheath` (busy, `gray -p`, pid 17426) and `asymmetric-oligomer-libration` (idle, `gray --stdio`, pid 14715). `gray-comms crew` shows `11 live session(s) · you are unitary-excimer-lattice (vstaln.unita)`, then `• isoth busy … /tmp/gc-throw · pid 17426 · 11s ago` and `• asymm idle … /tmp/gc-throw/probe · pid 14715 · 39s ago`; `crew --json` confirms `isoth busy / isothermal-photon-sheath 17426` and `asymm idle / asymmetric-oligomer-libration 14715`.
