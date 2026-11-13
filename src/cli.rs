@@ -79,7 +79,7 @@ pub enum Command {
         #[arg(long)]
         limit: Option<u64>,
     },
-    /// Every live Gray session on this machine (what the prompt block samples).
+    /// Every live Gray session on this machine — the TUI on a terminal.
     Crew {
         /// Machine-readable rows.
         #[arg(long)]
@@ -93,6 +93,20 @@ pub enum Command {
         /// Include sessions idle longer than 30 minutes.
         #[arg(long)]
         all: bool,
+        /// Text output even on a terminal.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// The interactive comms screen: sessions, tails, compose, mail.
+    Tui,
+    /// Name a session for the list and for `send` (a human label).
+    Nick {
+        /// Session id, id prefix, cwd substring or current nickname.
+        target: String,
+        /// New nickname; omitted with --clear to drop it.
+        name: Option<String>,
+        #[arg(long)]
+        clear: bool,
     },
     /// Message another live session by short id, pid, cwd substring, or --all.
     Send {
@@ -437,12 +451,49 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
             }
             crate::doctor::doctor(&config)
         }
+        Command::Tui => crate::tui::run(config_path),
+        Command::Nick {
+            target,
+            name,
+            clear,
+        } => {
+            let config = crate::config::load_config(config_path)?;
+            let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+            let views = crate::session::collect(&config, &me, 0, None);
+            let id = match crate::nick::resolve(&config, target) {
+                Some(id) => id,
+                None => match crate::session::find(&views, target) {
+                    Ok(v) => v.id.clone(),
+                    Err(_) => crate::session::find_known(&config, target)?,
+                },
+            };
+            if *clear || name.as_deref().is_none_or(|n| n.trim().is_empty()) {
+                crate::nick::clear(&config, &id)?;
+                println!("cleared nickname for {id}");
+            } else {
+                let name = name.clone().unwrap_or_default();
+                crate::nick::set(&config, &id, &name)?;
+                println!("named {id} {}", name.trim());
+            }
+            Ok(())
+        }
         Command::Crew {
             json,
             tail,
             dir,
             all,
+            plain,
         } => {
+            use std::io::IsTerminal;
+            if !*json
+                && !*plain
+                && tail.is_none()
+                && dir.is_none()
+                && !*all
+                && std::io::stdout().is_terminal()
+            {
+                return crate::tui::run(config_path);
+            }
             let config = crate::config::load_config(config_path)?;
             let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
             let mesh = crate::identity::mesh_name_now(&config, Some(&me)).unwrap_or_default();

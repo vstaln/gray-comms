@@ -1,6 +1,6 @@
 //! NDJSON protocol 1.1 sidecar.
 //! Manifest answers without config; a down daemon fails fast and safe.
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -254,7 +254,10 @@ pub(crate) fn send_tool(
     }
     let mode = Mode::parse(args.get("mode").and_then(Value::as_str))?;
     let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
-    let target = Target::parse(args.get("to").and_then(Value::as_str), all)?;
+    let target = match Target::parse(args.get("to").and_then(Value::as_str), all)? {
+        Target::One(raw) => Target::One(crate::nick::resolve(config, &raw).unwrap_or(raw)),
+        other => other,
+    };
     let me = session.clone().unwrap_or_default();
     let views = crate::session::collect(config, &me, 0, None);
     let gray_bin = config.get("gray_bin").and_then(Value::as_str).unwrap_or("");
@@ -266,7 +269,7 @@ pub(crate) fn send_tool(
                 return Err("no other live session to broadcast to".to_string());
             }
             for v in others {
-                match crate::deliver::send(gray_bin, &v.id, mesh, mode, &text) {
+                match crate::deliver::send(config, gray_bin, &v.id, mesh, mode, &text) {
                     Ok(sent) => out.push(format!("{} ({}) {}", v.short, v.id, sent.state)),
                     Err(e) => out.push(format!("{} failed: {e}", v.short)),
                 }
@@ -286,6 +289,7 @@ pub(crate) fn send_tool(
                     &format!("↳ from {mesh}\n{}", mode.payload(&text)),
                     ttl,
                 )?;
+                crate::mailog::append(config, mesh, &v.id, mode.label(), "queued", &text);
                 Ok(format!(
                     "sent as {} from {mesh}: {} ({}) queued for its next hook call ({} message(s) waiting, ttl {}m)",
                     mode.label(),
@@ -296,7 +300,7 @@ pub(crate) fn send_tool(
                 ))
             }
             Ok(v) => {
-                let sent = crate::deliver::send(gray_bin, &v.id, mesh, mode, &text)?;
+                let sent = crate::deliver::send(config, gray_bin, &v.id, mesh, mode, &text)?;
                 Ok(format!(
                     "sent as {} from {mesh}: {} ({}) {} id {}",
                     mode.label(),
@@ -311,7 +315,7 @@ pub(crate) fn send_tool(
                     return Err(why);
                 }
                 if let Ok(id) = crate::session::find_known(config, &raw) {
-                    let sent = crate::deliver::send(gray_bin, &id, mesh, mode, &text)?;
+                    let sent = crate::deliver::send(config, gray_bin, &id, mesh, mode, &text)?;
                     return Ok(format!(
                         "sent as {} from {mesh}: {id} (not live) {} id {}",
                         mode.label(),
@@ -329,6 +333,14 @@ pub(crate) fn send_tool(
                             .get("delivery")
                             .and_then(Value::as_str)
                             .unwrap_or("queued");
+                        crate::mailog::append(
+                            config,
+                            mesh,
+                            raw.trim(),
+                            mode.label(),
+                            delivery,
+                            &text,
+                        );
                         Ok(format!(
                             "no live session matched \"{raw}\"; queued a mesh dm from {mesh} to {}: {delivery}",
                             raw.trim()
@@ -560,7 +572,8 @@ fn prompt_context(config_path: &Path, params: &Value) -> Value {
 
 fn run_command(params: &Value, config_path: &Path) -> Value {
     let mut args: Vec<String> = params
-        .get("args")
+        .get("argv")
+        .or_else(|| params.get("args"))
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
@@ -568,6 +581,12 @@ fn run_command(params: &Value, config_path: &Path) -> Value {
                 .collect()
         })
         .unwrap_or_default();
+    let raw = params
+        .get("raw")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let head = args.first().map(String::as_str);
     if matches!(head, Some("setup")) || (args.is_empty() && !configured(config_path)) {
         if args.is_empty() {
@@ -581,8 +600,13 @@ fn run_command(params: &Value, config_path: &Path) -> Value {
     if matches!(head, Some("run" | "sidecar")) {
         return json!({ "text": "Run `gray comms run` in a terminal." });
     }
+    if let Some(first) = args.first() {
+        if first.starts_with('@') || first.starts_with('!') {
+            return addressed_send(&args, &raw, first.starts_with('!'), config_path);
+        }
+    }
     if args.is_empty() {
-        args.push("status".to_string());
+        return json!({ "terminal": ["tui"] });
     }
     let Ok(exe) = std::env::current_exe() else {
         return json!({ "text": "cannot locate gray-comms binary" });
@@ -613,6 +637,38 @@ fn run_command(params: &Value, config_path: &Path) -> Value {
             json!({ "text": text })
         }
         Err(e) => json!({ "text": format!("failed to run command: {e}") }),
+    }
+}
+
+fn addressed_send(args: &[String], raw: &str, kickstart: bool, config_path: &Path) -> Value {
+    let first = args.first().map(String::as_str).unwrap_or("");
+    let target = first.trim_start_matches(['@', '!']).trim();
+    if target.is_empty() {
+        return json!({ "text": "usage: /comms @ID text (send) or /comms !ID text (kickstart)" });
+    }
+    let text = if raw.starts_with(first) {
+        raw[first.len()..].trim().to_string()
+    } else {
+        args[1..].join(" ")
+    };
+    if text.is_empty() {
+        return json!({ "text": format!("nothing to send to {target}: /comms @{target} text") });
+    }
+    let Ok(config) = crate::config::load_config(config_path) else {
+        return json!({ "text": "comms is not configured — run /comms setup" });
+    };
+    let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+    let Ok(mesh) = crate::identity::mesh_name_now(&config, Some(&me)) else {
+        return json!({ "text": "comms cannot resolve this session's mesh name" });
+    };
+    let payload = json!({
+        "to": target,
+        "text": text,
+        "mode": if kickstart { "kickstart" } else { "message" },
+    });
+    match send_tool(&config, &Some(me), &mesh, &payload) {
+        Ok(text) => json!({ "text": text }),
+        Err(e) => json!({ "text": format!("send failed: {e}") }),
     }
 }
 

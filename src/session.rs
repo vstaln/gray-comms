@@ -76,6 +76,8 @@ pub struct View {
     pub claim: String,
     pub me: bool,
     pub last_ms: i64,
+    pub ctx_used: u64,
+    pub started_ms: i64,
 }
 
 impl View {
@@ -86,7 +88,11 @@ impl View {
             .next()
             .unwrap_or(&self.model)
             .to_string();
-        if m.is_empty() { "?".to_string() } else { m }
+        if m.is_empty() {
+            "?".to_string()
+        } else {
+            m
+        }
     }
 
     pub fn recap(&self) -> String {
@@ -163,10 +169,19 @@ pub fn pending_mail(config: &Value, id: &str) -> usize {
     let Ok(rd) = std::fs::read_dir(inbox_dir(config, id)) else {
         return 0;
     };
+    let fresh_ms = 24 * 60 * 60 * 1000;
     rd.flatten()
         .filter(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            name.ends_with(".json") && !name.starts_with('.')
+            if !name.ends_with(".json") || name.starts_with('.') {
+                return false;
+            }
+            e.metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.elapsed().ok())
+                .map(|age| (age.as_millis() as i64) < fresh_ms)
+                .unwrap_or(true)
         })
         .count()
 }
@@ -250,7 +265,7 @@ fn holder_pid(path: &Path) -> Option<u32> {
     v.get("pid").and_then(Value::as_u64).map(|p| p as u32)
 }
 
-fn header(path: &Path) -> Option<(String, String, String)> {
+fn header(path: &Path) -> Option<(String, String, String, i64)> {
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = vec![0u8; 8192];
     let n = f.read(&mut buf).ok()?;
@@ -270,6 +285,9 @@ fn header(path: &Path) -> Option<(String, String, String)> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        v.get("timestamp")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
     ))
 }
 
@@ -404,6 +422,50 @@ fn entries(path: &Path) -> Vec<Entry> {
     }
 }
 
+fn last_ctx(path: &Path) -> u64 {
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return 0;
+    };
+    let Ok(len) = f.metadata().map(|m| m.len()) else {
+        return 0;
+    };
+    let mut chunk: u64 = 64 * 1024;
+    loop {
+        let start = len.saturating_sub(chunk);
+        let mut buf = String::new();
+        if f.seek(SeekFrom::Start(start)).is_err() {
+            return 0;
+        }
+        if (&mut f).take(len - start).read_to_string(&mut buf).is_err() {
+            return 0;
+        }
+        let lines: Vec<&str> = buf.lines().collect();
+        let from = usize::from(start > 0);
+        for l in lines.iter().skip(from).rev() {
+            if !l.contains("\"usage\"") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(l) else {
+                continue;
+            };
+            let n = |k: &str| {
+                v.get("usage")
+                    .and_then(|u| u.get(k))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default()
+            };
+            let total = n("input_tokens") + n("output_tokens");
+            if total > 0 {
+                return total;
+            }
+        }
+        if start == 0 || chunk >= 8 * 1024 * 1024 {
+            return 0;
+        }
+        chunk *= 4;
+    }
+}
+
 fn shorts(ids: &[String]) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for id in ids {
@@ -423,8 +485,9 @@ fn shorts(ids: &[String]) -> HashMap<String, String> {
 }
 
 fn build(id: String, path: &Path, pid: Option<u32>) -> Option<View> {
-    let (cwd, model, origin) = header(path)?;
+    let (cwd, model, origin, started_ms) = header(path)?;
     let list = entries(path);
+    let ctx_used = last_ctx(path);
     let last_ms = list.last().map(|e| e.at).unwrap_or_default();
     let mut want = String::new();
     let mut did = String::new();
@@ -510,6 +573,8 @@ fn build(id: String, path: &Path, pid: Option<u32>) -> Option<View> {
         claim: String::new(),
         me: false,
         last_ms,
+        ctx_used,
+        started_ms,
     })
 }
 
@@ -659,6 +724,12 @@ pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
                 .join(", ")
         )),
     }
+}
+
+pub fn title(config: &Value, id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(root(config).join(format!("{id}.title"))).ok()?;
+    let line = text.lines().next().unwrap_or("").trim();
+    (!line.is_empty()).then(|| line.to_string())
 }
 
 pub fn short_for(config: &Value, id: &str) -> String {

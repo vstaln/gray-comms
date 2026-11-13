@@ -83,6 +83,7 @@ pub struct Sent {
 }
 
 pub fn send(
+    config: &serde_json::Value,
     gray_bin: &str,
     session: &str,
     from: &str,
@@ -115,7 +116,7 @@ pub fn send(
     }
     let v: Value = serde_json::from_str(stdout.trim())
         .map_err(|_| format!("`gray send` printed no JSON: {}", stdout.trim()))?;
-    Ok(Sent {
+    let sent = Sent {
         id: v
             .get("id")
             .and_then(Value::as_str)
@@ -126,5 +127,7 @@ pub fn send(
             .and_then(Value::as_str)
             .unwrap_or("queued")
             .to_string(),
-    })
+    };
+    crate::mailog::append(config, from, session, mode.label(), &sent.state, text);
+    Ok(sent)
 }
