@@ -16,7 +16,7 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "comms_join",
                 "label": "Comms Join",
-                "description": "Join the agent-comms mesh, optionally subscribing to a room. This agent's name comes from the config; join announces presence and returns how many DMs were waiting.",
+                "description": "Subscribe this session to a mesh room. Presence is automatic (each Gray session joins as its own name, busy/idle from activity), so this only matters for rooms; it returns the room membership.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -52,6 +52,21 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
                 }
             },
             {
+                "name": "comms_send",
+                "label": "Comms Send",
+                "description": "Message another live Gray session by short id, id prefix, pid, cwd substring, or all:true. Lands in that session's context mid-turn through gray send (exactly-once, state is Gray's own receipt); a target that is not a live session falls back to the mesh DM queue, which it picks up at its next check-in. Sender label is this session's mesh name, added automatically.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Target: live session short id or prefix, pid, cwd substring, or mesh agent name"},
+                        "text": {"type": "string", "description": "Message text (plain, one screen at most)"},
+                        "all": {"type": "boolean", "description": "Send to every other live session"},
+                        "mode": {"type": "string", "enum": ["message", "kickstart"], "description": "message (default) lands as context the target may act on; kickstart frames it as a directive the target acts on now"}
+                    },
+                    "required": ["text"]
+                }
+            },
+            {
                 "name": "comms_who",
                 "label": "Comms Who",
                 "description": "List agents on the mesh (or the members of one room) with live presence: active/idle/busy while connected, offline otherwise.",
@@ -80,7 +95,7 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
     })
 });
 
-const PROMPT_CONTEXT: &str = "Comms mesh tools: comms_join announces presence (optionally joining a room), comms_say posts to a room, comms_dm messages one agent by name (queued while they're offline), comms_who lists agents/presence, comms_read pulls room history or DM threads. DMs arrive between turns — new ones are flagged below. Keep messages plain text; never send secrets.";
+const PROMPT_CONTEXT: &str = "Comms: comms_join/comms_say for rooms, comms_dm for mesh DMs (queued while offline), comms_read for history, comms_who for mesh agents; new DMs are flagged below. Plain text only; never send secrets.";
 
 fn is_error() -> Value {
     json!({
@@ -103,7 +118,7 @@ pub fn dispatch(method: &str, params: &Value, config_path: &Path) -> Value {
         return MANIFEST.clone();
     }
     if method == "prompt/context" {
-        return prompt_context(config_path);
+        return prompt_context(config_path, params);
     }
     if method == "command/run" {
         return run_command(params, config_path);
@@ -111,7 +126,7 @@ pub fn dispatch(method: &str, params: &Value, config_path: &Path) -> Value {
     if method == "tool/call" {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         return match name {
-            "comms_join" | "comms_say" | "comms_dm" | "comms_who" | "comms_read" => {
+            "comms_join" | "comms_say" | "comms_dm" | "comms_who" | "comms_read" | "comms_send" => {
                 tool_call(name, params, config_path)
             }
             _ => is_error(),
@@ -126,13 +141,106 @@ fn tool_call(name: &str, params: &Value, config_path: &Path) -> Value {
         Ok(c) => c,
         Err(e) => return not_done(e),
     };
-    let mut client = match crate::client::Client::connect(&config) {
+    let session = crate::identity::session_id(params);
+    let mesh = match crate::identity::mesh_name_now(&config, session.as_deref()) {
+        Ok(n) => n,
+        Err(e) => return not_done(e),
+    };
+    if let Some(sid) = &session {
+        crate::presence::start(config.clone(), sid.clone(), mesh.clone());
+    }
+    if name == "comms_send" {
+        return match send_tool(&config, &session, &mesh, &args) {
+            Ok(text) => json!({"content": text}),
+            Err(e) => not_done(e),
+        };
+    }
+    let mut client = match crate::client::Client::connect_as(&config, &mesh) {
         Ok(c) => c,
         Err(e) => return not_done(e),
     };
     match run_tool(&mut client, name, &args, &config) {
         Ok(text) => json!({"content": text}),
         Err(e) => not_done(e),
+    }
+}
+
+pub(crate) fn send_tool(
+    config: &Value,
+    session: &Option<String>,
+    mesh: &str,
+    args: &Value,
+) -> Result<String, String> {
+    use crate::deliver::{Mode, Target};
+    let text = args
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return Err("text is empty".to_string());
+    }
+    let mode = Mode::parse(args.get("mode").and_then(Value::as_str))?;
+    let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
+    let target = Target::parse(args.get("to").and_then(Value::as_str), all)?;
+    let me = session.clone().unwrap_or_default();
+    let views = crate::session::collect(config, &me, 0, None);
+    let gray_bin = config.get("gray_bin").and_then(Value::as_str).unwrap_or("");
+    let mut out: Vec<String> = Vec::new();
+    match target {
+        Target::All => {
+            let others: Vec<_> = views.iter().filter(|v| !v.me).collect();
+            if others.is_empty() {
+                return Err("no other live session to broadcast to".to_string());
+            }
+            for v in others {
+                match crate::deliver::send(gray_bin, &v.id, mesh, mode, &text) {
+                    Ok(sent) => out.push(format!("{} ({}) {}", v.short, v.id, sent.state)),
+                    Err(e) => out.push(format!("{} failed: {e}", v.short)),
+                }
+            }
+            Ok(format!(
+                "sent as {} from {mesh}: {}",
+                mode.label(),
+                out.join(", ")
+            ))
+        }
+        Target::One(raw) => match crate::session::find(&views, &raw) {
+            Ok(v) => {
+                let sent = crate::deliver::send(gray_bin, &v.id, mesh, mode, &text)?;
+                Ok(format!(
+                    "sent as {} from {mesh}: {} ({}) {} id {}",
+                    mode.label(),
+                    v.short,
+                    v.id,
+                    sent.state,
+                    sent.id.chars().take(8).collect::<String>()
+                ))
+            }
+            Err(why) => {
+                if !why.starts_with("no live session matches") {
+                    return Err(why);
+                }
+                if !crate::proto::agent_name_valid(raw.trim()) {
+                    return Err(why);
+                }
+                let mut client = crate::client::Client::connect_as(config, mesh)?;
+                match client.call("dm", json!({"to": raw.trim(), "text": text})) {
+                    Ok(res) => {
+                        let delivery = res
+                            .get("delivery")
+                            .and_then(Value::as_str)
+                            .unwrap_or("queued");
+                        Ok(format!(
+                            "no live session matched \"{raw}\"; queued a mesh dm from {mesh} to {}: {delivery}",
+                            raw.trim()
+                        ))
+                    }
+                    Err(_) => Err(why),
+                }
+            }
+        },
     }
 }
 
@@ -297,13 +405,18 @@ fn format_messages(res: &Value) -> String {
 /// prompt/context: static tool guidance plus a one-line note when DMs
 /// arrived since the last look. Fails soft — a down daemon never blocks a
 /// prompt.
-fn prompt_context(config_path: &Path) -> Value {
+fn prompt_context(config_path: &Path, params: &Value) -> Value {
     let mut text = PROMPT_CONTEXT.to_string();
     let arrived = (|| -> Option<Vec<Value>> {
         let config = crate::config::load_config(config_path).ok()?;
         let mut client = crate::client::Client::connect(&config).ok()?;
-        let res = client.call("peek", json!({"unread": true, "limit": 20})).ok()?;
-        res.get("messages").and_then(Value::as_array).cloned().map(|m| m.to_vec())
+        let res = client
+            .call("peek", json!({"unread": true, "limit": 20}))
+            .ok()?;
+        res.get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .map(|m| m.to_vec())
     })();
     if let Some(msgs) = arrived {
         if !msgs.is_empty() {
@@ -331,6 +444,18 @@ fn prompt_context(config_path: &Path) -> Value {
             }
             note.push_str(" — read them with comms_read unread:true or comms_read with:<name>.");
             text.push_str(&note);
+        }
+    }
+    if let Ok(config) = crate::config::load_config(config_path) {
+        if let Some(sid) = crate::identity::session_id(params) {
+            if let Ok(mesh) = crate::identity::mesh_name_now(&config, Some(&sid)) {
+                crate::presence::start(config.clone(), sid.clone(), mesh);
+            }
+            if let Some(block) = crate::aware::block(&config, &sid, 3, None) {
+                if crate::aware::changed(&config, &sid, &block) {
+                    text = format!("{block}\n{text}");
+                }
+            }
         }
     }
     json!({"text": text})
