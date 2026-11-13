@@ -40,7 +40,7 @@ fn footer(me: &str, overflow: usize) -> String {
         ));
     }
     out.push_str(&format!(
-        "Message one: comms_send {{\"to\":\"<short>\",\"text\":\"...\"}} (add \"mode\":\"kickstart\" to direct), or `gray-comms send <short> \"...\"`. You are {me}."
+        "Message one: comms_send {{\"to\":\"<short>\",\"text\":\"...\"}} (add \"mode\":\"kickstart\" to direct), or `gray-comms send <short> \"...\"`. Claim what you are editing: comms_status {{\"text\":\"...\"}}. You are {me}."
     ));
     out
 }
@@ -66,6 +66,9 @@ pub fn block(config: &Value, me_id: &str, tail: usize, dir: Option<&str>) -> Opt
         let rest = others.len().min(MAX_SESSIONS).saturating_sub(i + 1);
         let reserve: usize = rest * 74;
         let mut candidate: Vec<String> = vec![entry_head(v)];
+        if !v.claim.is_empty() {
+            candidate.push(format!("  claim: {}", v.claim));
+        }
         if let Some(r) = entry_recap(v) {
             candidate.push(r);
         }

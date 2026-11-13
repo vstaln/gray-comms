@@ -67,6 +67,18 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
                 }
             },
             {
+                "name": "comms_status",
+                "label": "Comms Status",
+                "description": "Claim what this session is working on, in free text (e.g. \"editing src/session.rs\"). The claim shows up in every other live Gray session's awareness block until it expires after 30 minutes; action:\"clear\" removes it early. Use it before starting a change another session could collide with.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "What you are working on, one line"},
+                        "action": {"type": "string", "enum": ["set", "clear"], "description": "set (default) claims; clear drops the claim early"}
+                    }
+                }
+            },
+            {
                 "name": "comms_who",
                 "label": "Comms Who",
                 "description": "List agents on the mesh (or the members of one room) with live presence: active/idle/busy while connected, offline otherwise.",
@@ -126,9 +138,8 @@ pub fn dispatch(method: &str, params: &Value, config_path: &Path) -> Value {
     if method == "tool/call" {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         return match name {
-            "comms_join" | "comms_say" | "comms_dm" | "comms_who" | "comms_read" | "comms_send" => {
-                tool_call(name, params, config_path)
-            }
+            "comms_join" | "comms_say" | "comms_dm" | "comms_who" | "comms_read" | "comms_send"
+            | "comms_status" => tool_call(name, params, config_path),
             _ => is_error(),
         };
     }
@@ -155,6 +166,12 @@ fn tool_call(name: &str, params: &Value, config_path: &Path) -> Value {
             Err(e) => not_done(e),
         };
     }
+    if name == "comms_status" {
+        return match status_tool(&config, &session, &args) {
+            Ok(text) => json!({"content": text}),
+            Err(e) => not_done(e),
+        };
+    }
     let mut client = match crate::client::Client::connect_as(&config, &mesh) {
         Ok(c) => c,
         Err(e) => return not_done(e),
@@ -162,6 +179,38 @@ fn tool_call(name: &str, params: &Value, config_path: &Path) -> Value {
     match run_tool(&mut client, name, &args, &config) {
         Ok(text) => json!({"content": text}),
         Err(e) => not_done(e),
+    }
+}
+
+pub(crate) fn status_tool(
+    config: &Value,
+    session: &Option<String>,
+    args: &Value,
+) -> Result<String, String> {
+    use crate::claim::Action;
+    let action = Action::parse(args.get("action").and_then(Value::as_str))?;
+    let sid = session.clone().unwrap_or_default();
+    if sid.trim().is_empty() {
+        return Err("claims need a Gray session: this call carried no session id".to_string());
+    }
+    match action {
+        Action::Clear => {
+            let had = crate::claim::clear(config, &sid);
+            Ok(if had {
+                format!("claim cleared for {sid}")
+            } else {
+                format!("{sid} had no claim")
+            })
+        }
+        Action::Set => {
+            let text = args.get("text").and_then(Value::as_str).unwrap_or("");
+            let claim = crate::claim::set(config, &sid, text)?;
+            Ok(format!(
+                "claim set for {sid}: {} — other live sessions see it in their next context block; it expires in {}m",
+                claim.render(),
+                claim.remaining_secs() / 60
+            ))
+        }
     }
 }
 

@@ -6,6 +6,7 @@
 //! listeners. The gray sidecar exposes comms_* tools and a prompt/context
 //! hook that notes newly arrived DMs.
 pub mod aware;
+pub mod claim;
 pub mod cli;
 pub mod client;
 pub mod config;

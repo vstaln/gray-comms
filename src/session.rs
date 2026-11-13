@@ -73,6 +73,7 @@ pub struct View {
     pub want: String,
     pub did: String,
     pub tail: Vec<Line>,
+    pub claim: String,
     pub me: bool,
     pub last_ms: i64,
 }
@@ -503,6 +504,7 @@ fn build(id: String, path: &Path, pid: Option<u32>) -> Option<View> {
         want,
         did,
         tail: lines,
+        claim: String::new(),
         me: false,
         last_ms,
     })
@@ -544,6 +546,7 @@ pub fn collect(config: &Value, me: &str, tail: usize, dir: Option<&str>) -> Vec<
             v.short = short.clone();
         }
         v.me = id == me;
+        v.claim = crate::claim::label(config, &id);
         if let Some(d) = &dir {
             let hay = format!("{} {}", v.cwd.to_lowercase(), tilde(&v.cwd).to_lowercase());
             if !hay.contains(d.as_str()) {

@@ -100,6 +100,17 @@ pub enum Command {
         #[arg(short = 'k', long)]
         kickstart: bool,
     },
+    /// Claim what you are working on; shown in every other live session's block for 30 minutes.
+    Claim {
+        /// Free text, e.g. "editing src/session.rs".
+        text: Option<String>,
+        /// Drop the claim early.
+        #[arg(long)]
+        clear: bool,
+        /// Session to attach the claim to (default: this session).
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Stream live events (room messages, DMs, joins/leaves) until Ctrl-C.
     Listen {
         /// Rooms to join on connect, comma-separated.
@@ -212,6 +223,7 @@ fn view_json(v: &crate::session::View) -> Value {
         "model": v.model,
         "origin": v.origin,
         "status": v.status.label(),
+        "claim": v.claim,
         "fresh": v.status.fresh(),
         "idle_secs": v.idle_secs,
         "recap": v.recap(),
@@ -451,6 +463,9 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                         .unwrap_or_else(|| "?".to_string()),
                     ago(v.idle_secs)
                 );
+                if !v.claim.is_empty() {
+                    println!("  claim: {}", v.claim);
+                }
                 let recap = v.recap();
                 if !recap.is_empty() {
                     println!("  {recap}");
@@ -490,6 +505,26 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
             println!(
                 "{}",
                 crate::sidecar::send_tool(&config, &Some(me), &mesh, &args)?
+            );
+            Ok(())
+        }
+        Command::Claim {
+            text,
+            clear,
+            session,
+        } => {
+            let config = crate::config::load_config(config_path)?;
+            let sid = session
+                .clone()
+                .or_else(|| crate::identity::session_id(&Value::Null))
+                .unwrap_or_default();
+            let args = json!({
+                "text": text,
+                "action": if *clear { "clear" } else { "set" },
+            });
+            println!(
+                "{}",
+                crate::sidecar::status_tool(&config, &Some(sid), &args)?
             );
             Ok(())
         }
