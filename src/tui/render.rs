@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-const LEFT_W: u16 = 42;
+const LEFT_W: u16 = 48;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -153,15 +153,17 @@ fn list_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
 
 fn session_lines(app: &App, v: &View, depth: u8, width: usize, here: bool) -> Vec<Line<'static>> {
     const ID_W: usize = 6;
-    const STATUS_W: usize = 11;
+    const STATUS_W: usize = 9;
     let badge: Badge = app.badge(v);
     let indent = indent_for(depth);
-    let mut name = app.label(v);
-    if v.me {
-        name.push_str(" (you're here)");
-    }
     let used = indent.chars().count() + 2 + ID_W + 1 + STATUS_W + 1;
-    let label = fit(&name, width.saturating_sub(used));
+    let room = width.saturating_sub(used);
+    let name = app.label(v);
+    let name = match v.me {
+        true => format!("{} (you're here)", fit(&name, room.saturating_sub(14))),
+        false => name,
+    };
+    let label = fit(&name, room);
     let id = fit(&v.short, ID_W);
     let id_field = format!(
         "{id}{}",
@@ -407,9 +409,10 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.mode {
-        Mode::List => " ↑↓ pick · ⏎ type · m agent mail · n rename · o open · / filter · esc back "
-            .to_string(),
-        Mode::Compose => " ↑↓ pick · ctrl+⏎ kickstart · esc back ".to_string(),
+        Mode::List => {
+            " ↑↓ pick · ⏎ type · m agent mail · n rename · o open · / filter · q quit ".to_string()
+        }
+        Mode::Compose => " ⏎ send · alt+⏎ (or ctrl+⏎) make it act · esc back ".to_string(),
         Mode::Mail => " PgUp/PgDn scroll · esc back ".to_string(),
         Mode::Rename => " ⏎ save · esc cancel ".to_string(),
         Mode::Filter => " type to filter · ⏎ apply · esc clear ".to_string(),

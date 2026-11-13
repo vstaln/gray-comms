@@ -46,6 +46,14 @@ fn setup() -> Result<ratatui::Terminal<ratatui::backend::CrosstermBackend<std::i
     let mut out = std::io::stdout();
     crossterm::execute!(out, crossterm::terminal::EnterAlternateScreen)
         .map_err(|e| format!("alternate screen: {e}"))?;
+    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        let _ = crossterm::execute!(
+            out,
+            crossterm::event::PushKeyboardEnhancementFlags(
+                crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        );
+    }
     let backend = ratatui::backend::CrosstermBackend::new(out);
     let mut terminal = ratatui::Terminal::new(backend).map_err(|e| format!("terminal: {e}"))?;
     terminal.clear().map_err(|e| format!("clear failed: {e}"))?;
@@ -56,6 +64,7 @@ fn restore(terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<s
     let _ = crossterm::terminal::disable_raw_mode();
     let _ = crossterm::execute!(
         terminal.backend_mut(),
+        crossterm::event::PopKeyboardEnhancementFlags,
         crossterm::terminal::LeaveAlternateScreen
     );
     let _ = terminal.show_cursor();
