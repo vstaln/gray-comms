@@ -1,0 +1,40 @@
+ comms · 5 live · you are class                                                                                                       22:22
+┌ sessions ────────────────────────────────────┐┌ faker · wire the telegram retry ─────────────────────────────────────────────────────────┐
+│ /tmp/gc-tui/sandbox                          ││claude-opus-5-5 · busy 21m · ctx 181k/200k                                                │
+│ ⚠ faker  wire the telegram retry    retrying ││/tmp/gc-tui/sandbox · fakeretrying                                                        │
+│ ⚠ fakep  direct the film           quiet 12m ││                                                                                          │
+│   └ ⚠ fakec  act II/IV builder     quiet 12m ││› wire the telegram retry path                                                            │
+│ ○ fakeq  render the act 3               idle ││‹ Request failed, retrying (attempt 3/5) — provider returned overloaded_error             │
+│ other apps                                   ││⚙ bash: sleep 30                                                                          │
+│ ⚠ claud  Claude Code               quiet 10m ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+│                                              ││                                                                                          │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│to faker › _                                                                                ⏎ type · m mail · n rename · o open · / filter│
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↑↓ pick · ⏎ type · m agent mail · n rename · o open · / filter · q quit

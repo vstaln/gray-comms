@@ -31,6 +31,8 @@ block it already has in the conversation.
 | `~/.gray/comms/seen/<session>.json` | the sidecar | last block hash and length per session |
 | `~/.gray/comms/claims/<session>.json` | `comms_status` | claim text, `set_ms`, TTL |
 | `~/.gray/comms/foreign/<harness>-<sid8>.json` | `gray-comms hook` | harness session: cwd, transcript, pid, last seen |
+| `~/.gray/comms/nicknames.json` | the TUI, `nick` | short labels, also used by `send --to` |
+| `~/.gray/comms/mail.ndjson` | `deliver`, `send_tool` | append-only agent-to-agent log the mail view reads |
 | `~/.gray/comms/foreign/<harness>-<sid8>.mail.jsonl` | `comms_send` | mail waiting for that harness's next hook call |
 | `~/.gray/sessions/*.jsonl`, `*.open` | Gray | the live-session registry, read-only here |
 | `~/.gray/cron/inbox/<session>/` | `gray send` | queued messages, only counted here |
@@ -39,6 +41,30 @@ block it already has in the conversation.
 Nothing in `~/.gray/comms/` is required for correctness: delete `seen/` and
 the next prompt re-injects the block, delete `claims/` and the claims are
 gone.
+
+## The TUI
+
+`/comms` with no arguments answers `{"terminal": ["tui"]}`; Gray runs
+`<plugin> sidecar --config <path> tui` in place of its own screen and waits
+for the process. The wait is synchronous — `dispatch` hands the terminal to
+`maintenance::with_terminal`, which spawns the child and blocks on
+`status()` — so the calling turn is suspended for as long as the TUI is
+open: no model turn runs beside it. A `/comms` typed *during* a turn is
+requeued by `key_watcher` (`CommandOutcome::Terminal`) and opens the TUI
+once the turn ends.
+
+The TUI keeps one explicit mode (`List`, `Compose`, `Mail`, `Rename`,
+`Filter`) and matches it exhaustively on every key, so no key is handled in
+two places. It redraws on a 1 s timer (100 ms while a send is in flight),
+reads sessions read-only from `~/.gray/sessions`, and sends by spawning
+`gray send` exactly like `comms_send` does — a second poller would mean a
+second delivery path.
+
+Colours come from the modal theme Gray exports to child UIs
+(`GRAY_MODAL_THEME`, `role=#rrggbb,...`), falling back to `GRAY_THEME` /
+`theme` in `~/.gray/config.json`, then the built-in `gray` palette.
+`ctrl+⏎` is only distinguishable where the terminal reports it (kitty
+keyboard protocol); `alt+⏎` is the portable kickstart.
 
 ## Harness hooks
 

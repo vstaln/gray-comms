@@ -1,0 +1,45 @@
+ comms · 11 live · you are class                                                                                                                          22:21
+┌ sessions ────────────────────────────────────┐┌ class · comms-tui ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ ~/content                                    ││deepseek-v4.1-flash · busy 24m · ctx ?                                                                        │
+│ ○ muoni  Set up Kaggle/Colab for        idle ││~/content · classical-glueball-cyclone                                                                        │
+│   └ ● extra  ie-assets-3d               busy ││⚑ gray-comms TUI (PLAN-v3): reading repo, will edit src/* in ~/grayplug… (24m)                                │
+│   └ ● vorti  ie-assets-audio            busy ││                                                                                                              │
+│ ○ ultra  Resuming 3D face model         idle ││⟲ exit 0 · 0.0s · 70 lines · log ~/shell/classical-glueball-cyclone/bash-04f2e4bb308e4829b…                   │
+│   └ ● class  comms-t… (you're here)     busy ││⚙ bash                                                                                                        │
+│       ⚑ gray-comms TUI (PLAN-v3): reading re…││⟲ exit 0 · 0.1s · 7 lines · log ~/shell/classical-glueball-cyclone/bash-79e2de7a4363459381…                   │
+│   └ ⚠ refra  i2s-head-opus         quiet 28m ││⚙ bash                                                                                                        │
+│ ~/gray                                       ││⟲ exit 0 · 1.5s · 14 lines · log ~/shell/classical-glueball-cyclone/bash-5a052dce05294900b…                   │
+│ ● balli  150k is fine soemtimes         busy ││⚙ bash                                                                                                        │
+│ ● lumin  Continuing Blender room d…     busy ││⟲ exit 0 · 11s · 2 lines · log ~/shell/classical-glueball-cyclone/bash-9c4490a8cf874073bb0…                   │
+│ /tmp/gc-tui/alpha                            ││⚙ bash                                                                                                        │
+│ ○ nucle  from vstalnclass               idle ││⟲ exit 0 · 4.2s · 16 lines · log ~/shell/classical-glueball-cyclone/bash-30777425c320433f8…                   │
+│ /tmp/gc-tui/handoff                          ││⚙ bash                                                                                                        │
+│ ○ visco  no ask yet                     idle ││⟲ exit 0 · 3.9s · 30 lines · log ~/shell/classical-glueball-cyclone/bash-8670f72c4794425c9…                   │
+│ other apps                                   ││⚙ bash                                                                                                        │
+│ ○ claud  Claude Code                    idle ││⟲ exit 0 (`head` masks `grep`'s exit; rerun `grep` alone for its status) · 0.0s · 17 lines…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 0.1s · 5 lines · log ~/shell/classical-glueball-cyclone/bash-32bfb89f85614bfa9d…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 0.1s · 7 lines · log ~/shell/classical-glueball-cyclone/bash-2f1892b662884774bb…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 0.1s · 8 lines · log ~/shell/classical-glueball-cyclone/bash-8f733303b30c41f8a5…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 8.4s · 11 lines · log ~/shell/classical-glueball-cyclone/bash-1f1d5635f55c4fc18…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 7.5s · 1 lines · log ~/shell/classical-glueball-cyclone/bash-5951d054d94941549a…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 10s · 30 lines · log ~/shell/classical-glueball-cyclone/bash-3b421a7585ba4880be…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 0.9s · 3 lines · log ~/shell/classical-glueball-cyclone/bash-92bef37756ba4879ad…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 0.6s · 11 lines · log ~/shell/classical-glueball-cyclone/bash-b488dd3c5a704101a…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 0.0s · 47 lines · log ~/shell/classical-glueball-cyclone/bash-f5a8440e6c18487f9…                   │
+│                                              ││⚙ bash                                                                                                        │
+│                                              ││⟲ exit 0 · 7.7s · 1 lines · log ~/shell/classical-glueball-cyclone/bash-1b515a0a7fdf4821b9…                   │
+│                                              ││                                                                                                              │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│to class › _                                                                                                    ⏎ type · m mail · n rename · o open · / filter│
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ↑↓ pick · ⏎ type · m agent mail · n rename · o open · / filter · q quit

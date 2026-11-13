@@ -189,6 +189,50 @@ history still records the message for everyone:
 - `comms_read {room?|with?|unread?|limit?}` — room history, a DM thread,
   the DM inbox, or only newly arrived DMs
 
+## The TUI
+
+`/comms` with no arguments opens a live dashboard in the terminal: Gray
+suspends its own screen, runs `gray-comms tui`, and restores itself when the
+TUI exits. The same view is `gray-comms tui` from a shell, and bare
+`gray-comms crew` on a tty (a pipe, or `--plain` / `--json`, still prints
+text).
+
+```
+ comms · 8 live · you are ultra                                    21:58
+┌ sessions ────────────────┬ muoni · film director ────────────────┐
+│ ~/content                │ opus 5.5 · busy 2h14m · ctx 161k/200k │
+│ ● muoni   film director  │ › is inkling back                     │
+│   └ ● vorti  act II/IV   │ ‹ The Napoleon, Titan ...             │
+```
+
+Left: sessions grouped by folder, subagents nested under the parent that
+spawned them (`~/.gray/subagents/runs`), foreign harnesses under
+`other apps`, self marked `(you're here)`, claims as a `⚑` line. Names come
+from a nickname (`n`, `~/.gray/comms/nicknames.json`), else the session
+title, else four words of the latest prompt. Badges: `⚠ retrying` when the
+transcript tail shows a provider retry loop, `⚠ quiet Nm` when a busy
+session has not written for over ten minutes, `⚠ ctx NN%` past 90% of the
+model's window (from `~/.gray/models.json`).
+
+Right: model, state and duration, context, and the live transcript tail;
+`PgUp`/`PgDn` scroll back, otherwise it auto-scrolls.
+
+| key | |
+|---|---|
+| `↑` `↓` / `j` `k` | move (folder rows are skipped) |
+| `⏎` | focus the input; `⏎` sends, `alt+⏎` (or `ctrl+⏎` where the terminal reports it) kickstarts |
+| `m` | agent mail: the chronological log in `~/.gray/comms/mail.ndjson` |
+| `n` | rename (nickname, also accepted by `send --to`) |
+| `o` | open that session in a new terminal (`$TERMINAL`, then kitty, alacritty, wezterm, foot, konsole, gnome-terminal, x-terminal-emulator, xterm) |
+| `/` | filter by text |
+| `q` / `esc` | leave the TUI (Gray's screen returns) |
+
+Sends go through the same `gray send` path as `comms_send`, so mid-turn
+delivery and queueing behave identically; the delivery result shows in the
+footer for three seconds. Mail in `~/.gray/cron/inbox` is counted only when
+it is younger than 24 hours — older files are Gray's own history and are
+never touched.
+
 ## Runtime
 
 Two or three processes, all documented in `RUNTIME.md`: the supervised
@@ -213,7 +257,9 @@ calls. Nothing else to start.
 ## CLI additions
 
 ```sh
+gray-comms tui                                           # interactive dashboard
 gray-comms crew [--json] [--tail N] [--dir DIR] [--all]   # live sessions
+gray-comms nick <id> "film director"                     # nickname (clear: --clear)
 gray-comms send "hold off src/x.rs" --to vorti [-k]       # message a session
 gray-comms send "deploying now" --all                     # every other session
 gray-comms claim "editing src/session.rs"                 # claim work (30 min)

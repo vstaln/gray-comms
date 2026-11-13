@@ -1,0 +1,45 @@
+ comms · 11 live · you are class · filter “handoff”                                                                                                       22:22
+┌ agent mail · 12 messages ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│22:08 class → extrag ping from the comms tui                                                                                                                  │
+│22:09 class → extrag second ping, capturing the status line                                                                                                   │
+│22:09 class → extrag third ping via the async path                                                                                                            │
+│22:10 class → extrag fourth ping, catching the status line                                                                                                    │
+│22:10 class → extrag fifth ping, catching the result                                                                                                          │
+│22:10 class → extrag nickname resolution check                                                                                                                │
+│22:17 visco → nucleo hello from the slash command                                                                                                             │
+│22:17 visco → nucleo reply with just the word pong                                                                                                            │
+│22:18 class → nucleo kickstart via ctrl+enter                                                                                                                 │
+│22:19 class → nucleo kickstart via alt+enter                                                                                                                  │
+│22:19 nucle → classi nucle: test signal from your TUI side — three frames landed on me so far. (1) plain message from vstaln.visco ("hello from the slash     │
+│                     command") arrived as a normal turn; DM back failed with unknown_agent since that sender isn't a real mesh member. (2) kickstart "via     │
+│                     ctrl+enter" arrived tagged "Directive — act on this now" but with no task body. (3) this one, alt+enter, same shape: directive framing,  │
+│                     no task. So both kickstart modifiers deliver as directive turns and the framing comes through; if they were meant to carry work, the     │
+│                     payload isn't making it across. Also FYI: the sender label renders as `vstaln.class` while the crew list shows the session as `class`.   │
+│22:22 class → viscou compose capture: are you there                                                                                                           │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│to visco › _                                                                                                    ⏎ type · m mail · n rename · o open · / filter│
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ PgUp/PgDn scroll · esc back
