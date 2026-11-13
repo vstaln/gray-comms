@@ -164,3 +164,51 @@ Gray already locks.
    opens the TUI and `q` returns to Gray's screen.
 5. `crew`, `crew --plain`, `send`, `claim`, `@ID`/`!ID` from `/comms` still
    behave.
+
+## What shipped, and where it deviates
+
+Commits: the plan doc, `feat: interactive TUI behind /comms`, the list/self
+marker/keyboard fix, and the README/RUNTIME docs with `docs/captures/`.
+
+Deviations, all deliberate:
+
+- **`ctrl+⏎` is not distinguishable** in tmux, kitty or anything else that
+  does not speak the kitty keyboard protocol, and xterm-style terminals send
+  the same byte as `⏎`. The TUI asks for keyboard enhancement on start
+  (`DISAMBIGUATE_ESCAPE_CODES`) and accepts `Enter+CONTROL`, so a capable
+  terminal works as specified — but the portable kickstart is **`alt+⏎`**,
+  which is what the footer and the README advertises.
+- **`o` was verified with a stub `$TERMINAL`** that logged its argv instead
+  of opening a window, so testing did not pop a window on the desktop. The
+  spawn itself (`gray resume <id>`, cwd of the session, detached) is real.
+- **Warnings are heuristics, not status from Gray**: a retry badge means a
+  line matching a provider retry pattern in the transcript tail, a quiet
+  badge means a busy session with nothing new for 10 min, and `ctx NN%` is
+  only shown between 90% and 200% of the model's window — some providers
+  report cumulative token counts (Gemini reported 901%), and a badge you
+  cannot trust is worse than none.
+- **Context window comes from `~/.gray/models.json`** per model, falling
+  back to `context_window` in the config, then 200k. Sessions that never
+  wrote a `usage` line show `ctx ?`.
+- **Subagent parents** are read from `~/.gray/subagents/runs/*.json`
+  (`child_session` → `session_id`), because a session's own jsonl carries no
+  parent link. 1103 files / 18 MB is too much per second, so the full scan
+  happens once and the newest 64 are re-read every 10 s. Grandchildren are
+  flattened to depth 1.
+- **Folder groups** are ordered `other apps` last, then the folder that
+  holds me, then freshest first; a subagent row is anchored to its parent's
+  folder.
+- **`esc`** clears an active filter first and quits on the next press; `q`
+  always quits. The footer says `q quit` so it is not a trap.
+- **Sends run on a worker thread** so the refresh keeps ticking; the footer
+  shows `sending to <id>…` and then the result for three seconds.
+- **Mail view** reads the last 300 rows of `~/.gray/comms/mail.ndjson`
+  (the file is append-only and unbounded by design).
+- **`nicknames.json` is global** (`~/.gray/comms/`), shared by the TUI and
+  `gray-comms nick`; `send --to <nickname>` resolves through it, so a
+  nickname is also a target.
+- **Nothing else was added to the inbox path**: `crew` and the TUI count
+  only `~/.gray/cron/inbox` files younger than 24 h and never delete.
+
+Not done: no live theme reload (the palette is read once at start), no
+paging in the mail view, no `/comms` help text.
