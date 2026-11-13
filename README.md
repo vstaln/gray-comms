@@ -16,19 +16,19 @@ them mid-turn — no room, no registration, nothing to call.
 - **Daemon** (`gray-comms run`): a tokio TCP server holding room membership,
   presence, and a bounded durable history in SQLite. Wire ops: `join`,
   `leave`, `join_room`, `say`, `dm`, `who`, `rooms`, `peek`, `status`, `ping`.
-- **Sidecar** (`gray-comms sidecar`): exposes six tools to the model —
-  `comms_send`, `comms_join`, `comms_say`, `comms_dm`, `comms_who`,
-  `comms_read` — plus a `prompt/context` hook that notes newly arrived DMs
-  and injects the live-session block (below).
-- **CLI**: `crew`, `send`, `join`, `say`, `dm`, `who`, `rooms`, `read`,
-  `listen` for humans and scripts, plus
+- **Sidecar** (`gray comms`): exposes seven tools to the model —
+  `comms_send`, `comms_status`, `comms_join`, `comms_say`, `comms_dm`,
+  `comms_who`, `comms_read` — plus a `prompt/context` hook that notes newly
+  arrived DMs, injects claims and the live-session block (below).
+- **CLI**: `crew`, `send`, `claim`, `join`, `say`, `dm`, `who`, `rooms`,
+  `read`, `listen` for humans and scripts, plus
   `setup/install/status/stop/restart/doctor/uninstall`.
 
 ## Sessions, presence and awareness
 
 - **Identity.** Each session joins the mesh as its own name: the config
   `name` is a prefix, the suffix is the Gray session's short id —
-  `gray-e2e.unita`, `gray-e2e.vorti`, … `"identity": "fixed"` keeps the old
+  `vstaln.unita`, `vstaln.vorti`, … `"identity": "fixed"` keeps the old
   single-name behaviour. Names are computed per call from `GRAY_SESSION_ID`
   (or the hook's `session.id`), never stored.
 - **Presence.** The sidecar opens one connection for the life of the session
@@ -40,8 +40,28 @@ them mid-turn — no room, no registration, nothing to call.
   lines — capped at ~1200 chars, self and sessions idle >30 min excluded.
   Sessions come from Gray's own live-session registry (`~/.gray/sessions`
   plus the `.open` lock), so agents that never joined the mesh still appear.
-  The rendered block is hashed per session under `~/.gray/comms/seen/`; an
-  unchanged block is not injected again.
+  A session that claimed work shows one extra line (`claim: editing
+  src/x.rs (4m)`). The rendered block is hashed per session under
+  `~/.gray/comms/seen/`; an unchanged block is not injected again.
+- **Claims.** `comms_status {"text": "editing src/session.rs"}` (CLI:
+  `gray-comms claim "…"`) publishes what a session is touching. Claims are
+  files under `~/.gray/comms/claims/` and expire on read after 30 minutes;
+  `action:"clear"` drops one early.
+- **Pending mail.** `crew` counts the messages still sitting in a session's
+  `gray send` inbox: a `· 2 mail` badge on live rows, and a `not live ·
+  N queued message(s)` footer for sessions that are not running.
+
+## Runs without the daemon
+
+The daemon is optional. Everything that is about *sessions on this machine*
+works with it stopped: the awareness block, `crew`, `comms_send` (which is
+`gray send` underneath), claims, pending mail, and the CLI verbs built on
+them (`crew`, `send`, `claim`). The daemon only adds the parts that need a
+shared broker: rooms, DMs, cross-machine presence, durable history. When it
+is down the hook simply notes no new DMs and `comms_join/say/dm/who/read`
+answer with a fixable error; `gray-comms doctor` still exits 0 and shows
+`• daemon mode — down` with a one-line reminder of what still runs.
+See `RUNTIME.md` for the process and state map.
 
 ## Wire protocol
 
@@ -136,6 +156,8 @@ history still records the message for everyone:
   `all:true`. Delivery is one `gray send`, so it lands mid-turn and is
   exactly-once; `mode:"kickstart"` frames the text as a directive. A target
   that is no live session falls back to a mesh DM queued in the daemon.
+- `comms_status {text?, action?}` — claim what you are working on, or
+  `action:"clear"`; visible in every other session's block for 30 minutes
 - `comms_join {room?, status?}` — subscribe a room (presence is automatic)
 - `comms_say {room?, text}` — post to a room (default: `home_room`)
 - `comms_dm {to, text}` — DM an agent; reports `delivered`/`queued`
@@ -143,6 +165,13 @@ history still records the message for everyone:
   (`gray-comms crew` is the live-session view instead)
 - `comms_read {room?|with?|unread?|limit?}` — room history, a DM thread,
   the DM inbox, or only newly arrived DMs
+
+## Runtime
+
+Two or three processes, all documented in `RUNTIME.md`: the supervised
+daemon (runit / systemd --user / detached), one sidecar per live Gray
+session (spawned by Gray, lives as long as the session), and one-shot CLI
+calls. Nothing else to start.
 
 ## Limits
 
@@ -164,4 +193,9 @@ history still records the message for everyone:
 gray-comms crew [--json] [--tail N] [--dir DIR] [--all]   # live sessions
 gray-comms send "hold off src/x.rs" --to vorti [-k]       # message a session
 gray-comms send "deploying now" --all                     # every other session
+gray-comms claim "editing src/session.rs"                 # claim work (30 min)
+gray-comms claim --clear                                  # drop the claim
+gray-comms send "…" --to <stopped session id>             # queues for resume
 ```
+
+`gray comms <verb>` is the same CLI inside a Gray shell.
