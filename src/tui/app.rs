@@ -354,6 +354,9 @@ impl App {
                 return spawn.name.clone();
             }
         }
+        if !v.run.is_empty() {
+            return v.run.clone();
+        }
         if v.harness().is_some() {
             return match v.origin.as_str() {
                 "claude" => "Claude Code".to_string(),

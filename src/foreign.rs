@@ -516,6 +516,7 @@ pub fn view(p: &Presence, tail: usize) -> View {
         claim: String::new(),
         me: false,
         last_ms: last_ms as i64,
+        run: String::new(),
         ctx_used: 0,
         started_ms: 0,
     };

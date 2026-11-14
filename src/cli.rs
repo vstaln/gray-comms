@@ -260,6 +260,7 @@ fn view_json(v: &crate::session::View) -> Value {
     json!({
         "id": v.id,
         "short": v.short,
+        "run": v.run,
         "pid": v.pid,
         "cwd": v.cwd,
         "cwd_tilde": v.cwd_short(),
@@ -462,7 +463,7 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
             let views = crate::session::collect(&config, &me, 0, None);
             let id = match crate::nick::resolve(&config, target) {
                 Some(id) => id,
-                None => match crate::session::find(&views, target) {
+                None => match crate::session::find(&config, &views, target) {
                     Ok(v) => v.id.clone(),
                     Err(_) => crate::session::find_known(&config, target)?,
                 },
@@ -535,7 +536,7 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
                 let mail = pending_of(&config, v);
                 println!(
                     "• {} {} · {}{} · {}{}{} · pid {} · {}",
-                    v.short,
+                    v.handle(),
                     v.status.label(),
                     match v.harness() {
                         Some(h) => format!("{h} · "),

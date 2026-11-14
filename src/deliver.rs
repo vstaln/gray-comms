@@ -131,3 +131,40 @@ pub fn send(
     crate::mailog::append(config, from, session, mode.label(), &sent.state, text);
     Ok(sent)
 }
+
+pub fn steer(
+    config: &serde_json::Value,
+    gray_bin: &str,
+    run: &str,
+    from: &str,
+    mode: Mode,
+    text: &str,
+) -> Result<Sent, String> {
+    if gray_bin.trim().is_empty() {
+        return Err("no gray_bin in the config".to_string());
+    }
+    let out = std::process::Command::new(gray_bin)
+        .arg("subagents")
+        .arg("steer")
+        .arg(run)
+        .arg("--")
+        .arg(mode.payload(text))
+        .env_remove("GRAY_SUBAGENTS_ACTIVE")
+        .output()
+        .map_err(|_| "cannot run `gray subagents steer`".to_string())?;
+    if !out.status.success() {
+        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let detail = if detail.is_empty() {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        } else {
+            detail
+        };
+        return Err(format!("`gray subagents steer` failed: {detail}"));
+    }
+    let sent = Sent {
+        id: run.to_string(),
+        state: "steered".to_string(),
+    };
+    crate::mailog::append(config, from, run, mode.label(), "steered", text);
+    Ok(sent)
+}

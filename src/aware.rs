@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
-use crate::session::{View, short_for, tilde};
+use crate::session::{short_for, tilde, View};
 
 pub const MAX_CHARS: usize = 1200;
 pub const MAX_SESSIONS: usize = 6;
@@ -10,7 +10,7 @@ fn entry_head(v: &View) -> String {
     match v.harness() {
         Some(h) => format!(
             "• {} {} · {} · {} · {}",
-            v.short,
+            v.handle(),
             v.status.label(),
             h,
             v.short_model(),
@@ -18,7 +18,7 @@ fn entry_head(v: &View) -> String {
         ),
         None => format!(
             "• {} {} · {} · {}",
-            v.short,
+            v.handle(),
             v.status.label(),
             v.short_model(),
             tilde(&v.cwd)
@@ -50,7 +50,7 @@ fn footer(me: &str, overflow: usize) -> String {
         ));
     }
     out.push_str(&format!(
-        "Message one: comms_send {{\"to\":\"<short>\",\"text\":\"...\"}} (add \"mode\":\"kickstart\" to direct), or `gray-comms send <short> \"...\"`. Claim what you are editing: comms_status {{\"text\":\"...\"}}. You are {me}."
+        "Message one: comms_send {{\"to\":\"<short>\",\"text\":\"...\"}} — short id, the subagent run name in brackets, a pid or a cwd substring all resolve; add \"mode\":\"kickstart\" to direct. Claim what you are editing: comms_status {{\"text\":\"...\"}}. You are {me}."
     ));
     out
 }

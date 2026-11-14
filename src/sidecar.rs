@@ -281,7 +281,7 @@ pub(crate) fn send_tool(
                 out.join(", ")
             ))
         }
-        Target::One(raw) => match crate::session::find(&views, &raw) {
+        Target::One(raw) => match crate::session::find(config, &views, &raw) {
             Ok(v) if v.harness().is_some() => {
                 let ttl = ttl_secs(args.get("ttl").and_then(Value::as_str))?;
                 let queued = crate::foreign::queue(
@@ -324,30 +324,57 @@ pub(crate) fn send_tool(
                         sent.id.chars().take(8).collect::<String>()
                     ));
                 }
-                if !crate::proto::agent_name_valid(raw.trim()) {
-                    return Err(why);
-                }
-                let mut client = crate::client::Client::connect_as(config, mesh)?;
-                match client.call("dm", json!({"to": raw.trim(), "text": text})) {
-                    Ok(res) => {
-                        let delivery = res
-                            .get("delivery")
-                            .and_then(Value::as_str)
-                            .unwrap_or("queued");
-                        crate::mailog::append(
-                            config,
-                            mesh,
-                            raw.trim(),
-                            mode.label(),
-                            delivery,
-                            &text,
-                        );
-                        Ok(format!(
-                            "no live session matched \"{raw}\"; queued a mesh dm from {mesh} to {}: {delivery}",
-                            raw.trim()
-                        ))
+                let mut notes: Vec<String> = Vec::new();
+                if let Some(run) = crate::spawns::find_run(config, raw.trim()) {
+                    match crate::deliver::steer(config, gray_bin, &run.name, mesh, mode, &text) {
+                        Ok(_) => {
+                            let child = if run.child.is_empty() {
+                                "its session".to_string()
+                            } else {
+                                format!("session {}", run.child)
+                            };
+                            return Ok(format!(
+                                "sent as {} from {mesh}: steered subagent run {} — {} is not live in this mesh, the run picks the message up on its next turn",
+                                mode.label(),
+                                run.name,
+                                child
+                            ));
+                        }
+                        Err(e) => notes.push(e),
                     }
-                    Err(_) => Err(why),
+                }
+                if crate::proto::agent_name_valid(raw.trim()) {
+                    if let Ok(mut client) = crate::client::Client::connect_as(config, mesh) {
+                        match client.call("dm", json!({"to": raw.trim(), "text": text})) {
+                            Ok(res) => {
+                                let delivery = res
+                                    .get("delivery")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("queued");
+                                crate::mailog::append(
+                                    config,
+                                    mesh,
+                                    raw.trim(),
+                                    mode.label(),
+                                    delivery,
+                                    &text,
+                                );
+                                return Ok(format!(
+                                    "no live session matched \"{raw}\"; queued a mesh dm from {mesh} to {}: {delivery}",
+                                    raw.trim()
+                                ));
+                            }
+                            Err(e) => notes.push(e),
+                        }
+                    }
+                }
+                if notes.is_empty() {
+                    Err(why)
+                } else {
+                    Err(format!(
+                        "{why}; also tried a mesh dm — {}",
+                        notes.join("; ")
+                    ))
                 }
             }
         },
@@ -421,17 +448,72 @@ fn run_tool(
             Ok(format!("posted to #{room}"))
         }
         "comms_dm" => {
-            let to = args.get("to").and_then(Value::as_str).unwrap_or("");
+            let to = args.get("to").and_then(Value::as_str).unwrap_or("").trim();
             let text = args.get("text").and_then(Value::as_str).unwrap_or("");
             if text.trim().is_empty() {
                 return Err("text is empty".to_string());
             }
-            let res = c.call("dm", json!({"to": to, "text": text}))?;
-            let delivery = res
-                .get("delivery")
-                .and_then(Value::as_str)
-                .unwrap_or("queued");
-            Ok(format!("dm to {to}: {delivery}"))
+            if to.is_empty() {
+                return Err(format!(
+                    "give `to` — a mesh agent, or any live session handle ({})",
+                    crew_handles(config)
+                ));
+            }
+            match c.call("dm", json!({"to": to, "text": text})) {
+                Ok(res) => {
+                    let delivery = res
+                        .get("delivery")
+                        .and_then(Value::as_str)
+                        .unwrap_or("queued");
+                    Ok(format!("dm to {to}: {delivery}"))
+                }
+                Err(e) => {
+                    if let Some(name) = mesh_agent_named(c, to) {
+                        let res = c.call("dm", json!({"to": name, "text": text}))?;
+                        let delivery = res
+                            .get("delivery")
+                            .and_then(Value::as_str)
+                            .unwrap_or("queued");
+                        return Ok(format!("dm to {name} (matched \"{to}\"): {delivery}"));
+                    }
+                    let gray_bin = config.get("gray_bin").and_then(Value::as_str).unwrap_or("");
+                    let mesh = crate::identity::mesh_name_now(config, None)?;
+                    let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+                    let views = crate::session::collect(config, &me, 0, None);
+                    if let Ok(v) = crate::session::find(config, &views, to) {
+                        let sent = crate::deliver::send(
+                            config,
+                            gray_bin,
+                            &v.id,
+                            &mesh,
+                            crate::deliver::Mode::Message,
+                            text,
+                        )?;
+                        return Ok(format!(
+                            "no mesh agent \"{to}\"; sent to live session {} ({}) {} id {}",
+                            v.handle(),
+                            v.id,
+                            sent.state,
+                            sent.id.chars().take(8).collect::<String>()
+                        ));
+                    }
+                    if let Some(run) = crate::spawns::find_run(config, to) {
+                        crate::deliver::steer(
+                            config,
+                            gray_bin,
+                            &run.name,
+                            &mesh,
+                            crate::deliver::Mode::Message,
+                            text,
+                        )?;
+                        return Ok(format!(
+                            "no mesh agent \"{to}\"; steered subagent run {}",
+                            run.name
+                        ));
+                    }
+                    Err(format!("{e}; {}", crew_handles(config)))
+                }
+            }
         }
         "comms_who" => {
             let mut params = json!({});
@@ -481,11 +563,52 @@ fn run_tool(
             if let Some(n) = args.get("limit").and_then(Value::as_u64) {
                 params["limit"] = json!(n);
             }
-            let res = c.call("peek", params)?;
+            let res = match c.call("peek", params.clone()) {
+                Ok(r) => r,
+                Err(e) if e.contains("not_member") => {
+                    if let Some(room) = args.get("room").and_then(Value::as_str) {
+                        c.call("join_room", json!({"room": room}))?;
+                        c.call("peek", params)?
+                    } else {
+                        return Err(format!("{e}; pass room to join it first"));
+                    }
+                }
+                Err(e) => return Err(e),
+            };
             Ok(format_messages(&res))
         }
         _ => Err("unknown tool".to_string()),
     }
+}
+
+fn crew_handles(config: &Value) -> String {
+    let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+    let views = crate::session::collect(config, &me, 0, None);
+    let live: Vec<String> = views
+        .iter()
+        .filter(|v| v.status.fresh())
+        .take(8)
+        .map(|v| v.handle())
+        .collect();
+    if live.is_empty() {
+        "no live session to message".to_string()
+    } else {
+        format!("live sessions: {}", live.join(", "))
+    }
+}
+
+fn mesh_agent_named(c: &mut crate::client::Client, raw: &str) -> Option<String> {
+    let res = c.call("who", json!({})).ok()?;
+    let want = raw.to_lowercase();
+    res.get("agents")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|a| a.get("name").and_then(Value::as_str))
+        .find(|n| {
+            let low = n.to_lowercase();
+            low == want || low.ends_with(&format!(".{want}"))
+        })
+        .map(str::to_string)
 }
 
 /// Render a peek result as transcript lines: `from: text`.

@@ -76,6 +76,7 @@ pub struct View {
     pub claim: String,
     pub me: bool,
     pub last_ms: i64,
+    pub run: String,
     pub ctx_used: u64,
     pub started_ms: i64,
 }
@@ -113,6 +114,14 @@ impl View {
 
     pub fn cwd_short(&self) -> String {
         tilde(&self.cwd)
+    }
+
+    pub fn handle(&self) -> String {
+        if self.run.is_empty() {
+            self.short.clone()
+        } else {
+            format!("{} ({})", self.short, self.run)
+        }
     }
 }
 
@@ -573,6 +582,7 @@ fn build(id: String, path: &Path, pid: Option<u32>) -> Option<View> {
         claim: String::new(),
         me: false,
         last_ms,
+        run: String::new(),
         ctx_used,
         started_ms,
     })
@@ -642,13 +652,54 @@ pub fn collect(config: &Value, me: &str, tail: usize, dir: Option<&str>) -> Vec<
             v.short = s.clone();
         }
         v.tail = v.tail.split_off(v.tail.len().saturating_sub(tail));
+        if let Some(pid) = v.pid {
+            v.run = crate::spawns::name_for_pid(config, pid).unwrap_or_default();
+        }
     }
     views.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then(a.id.cmp(&b.id)));
     views
 }
 
-pub fn find<'a>(views: &'a [View], raw: &str) -> Result<&'a View, String> {
-    let raw = raw.trim();
+fn narrow<'a>(hits: Vec<&'a View>) -> Vec<&'a View> {
+    let fresh: Vec<&'a View> = hits.iter().copied().filter(|v| v.status.fresh()).collect();
+    if fresh.is_empty() {
+        hits
+    } else {
+        fresh
+    }
+}
+
+fn handle_list(hits: &[&View]) -> String {
+    hits.iter()
+        .take(6)
+        .map(|v| format!("{} in {}", v.handle(), tilde(&v.cwd)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn settle<'a>(raw: &str, hits: Vec<&'a View>) -> Result<Option<&'a View>, String> {
+    if hits.is_empty() {
+        return Ok(None);
+    }
+    let hits = narrow(hits);
+    if hits.len() == 1 {
+        return Ok(Some(hits[0]));
+    }
+    Err(format!(
+        "ambiguous target \"{raw}\": {} — pick one",
+        handle_list(&hits)
+    ))
+}
+
+fn squash(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+pub fn find<'a>(config: &Value, views: &'a [View], raw: &str) -> Result<&'a View, String> {
+    let raw = raw.trim().trim_start_matches('@').trim();
     if raw.is_empty() {
         return Err("empty target".to_string());
     }
@@ -657,40 +708,138 @@ pub fn find<'a>(views: &'a [View], raw: &str) -> Result<&'a View, String> {
             return Ok(v);
         }
     }
-    if let Some(v) = views.iter().find(|v| v.id == raw) {
-        return Ok(v);
-    }
-    let by_id: Vec<&View> = views.iter().filter(|v| v.id.starts_with(raw)).collect();
-    if by_id.len() == 1 {
-        return Ok(by_id[0]);
-    }
-    if by_id.is_empty() {
-        let lower = raw.to_lowercase();
-        let by_cwd: Vec<&View> = views
-            .iter()
-            .filter(|v| {
-                v.cwd.to_lowercase().contains(&lower)
-                    || tilde(&v.cwd).to_lowercase().contains(&lower)
-            })
-            .collect();
-        match by_cwd.len() {
-            1 => return Ok(by_cwd[0]),
-            0 => {
-                return Err(format!(
-                    "no live session matches \"{raw}\" (targets: id prefix, pid, cwd substring)"
-                ));
-            }
-            _ => {
-                let list: Vec<String> = by_cwd
-                    .iter()
-                    .map(|v| format!("{} ({})", v.short, tilde(&v.cwd)))
-                    .collect();
-                return Err(format!("ambiguous target \"{raw}\": {}", list.join(", ")));
-            }
+    let want = raw.to_lowercase();
+    let mut aliases: Vec<String> = vec![want.clone()];
+    if let Some((_, tail)) = want.rsplit_once('.') {
+        if !tail.is_empty() && tail != want {
+            aliases.push(tail.to_string());
         }
     }
-    let list: Vec<String> = by_id.iter().map(|v| v.id.clone()).collect();
-    Err(format!("ambiguous target \"{raw}\": {}", list.join(", ")))
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| v.id.to_lowercase() == want)
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| !v.run.is_empty() && aliases.iter().any(|a| v.run.to_lowercase() == *a))
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| aliases.iter().any(|a| v.short.to_lowercase() == *a))
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    let mut nick_hits: Vec<&View> = Vec::new();
+    for a in &aliases {
+        if let Some(id) = crate::nick::resolve(config, a) {
+            nick_hits.extend(views.iter().filter(|v| v.id == id));
+        }
+    }
+    if let Some(found) = settle(raw, nick_hits)? {
+        return Ok(found);
+    }
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| aliases.iter().any(|a| v.id.to_lowercase().starts_with(a)))
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| {
+                !v.run.is_empty() && aliases.iter().any(|a| v.run.to_lowercase().starts_with(a))
+            })
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| {
+                aliases
+                    .iter()
+                    .any(|a| v.short.to_lowercase().starts_with(a))
+            })
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    if let Some(found) = settle(
+        raw,
+        views
+            .iter()
+            .filter(|v| {
+                format!("{} {}", v.cwd.to_lowercase(), tilde(&v.cwd).to_lowercase()).contains(&want)
+            })
+            .collect(),
+    )? {
+        return Ok(found);
+    }
+    let squashed = squash(raw);
+    if !squashed.is_empty() {
+        if let Some(found) = settle(
+            raw,
+            views
+                .iter()
+                .filter(|v| {
+                    squashed == squash(&v.id)
+                        || squashed == squash(&v.short)
+                        || (!v.run.is_empty() && squashed == squash(&v.run))
+                })
+                .collect(),
+        )? {
+            return Ok(found);
+        }
+        if let Some(found) = settle(
+            raw,
+            views
+                .iter()
+                .filter(|v| {
+                    squash(&v.id).starts_with(&squashed)
+                        || (!v.run.is_empty() && squash(&v.run).starts_with(&squashed))
+                })
+                .collect(),
+        )? {
+            return Ok(found);
+        }
+        if let Some(found) = settle(raw, views.iter().filter(|v| v.id.contains(&want)).collect())? {
+            return Ok(found);
+        }
+    }
+    let fresh: Vec<&View> = views.iter().filter(|v| v.status.fresh()).collect();
+    let pool: Vec<&View> = if fresh.is_empty() {
+        views.iter().collect()
+    } else {
+        fresh
+    };
+    Err(format!(
+        "no live session matches \"{raw}\" (tried id, short, subagent run name, mesh nick, pid, cwd); live now: {}",
+        pool.iter()
+            .take(8)
+            .map(|v| v.handle())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
@@ -701,13 +850,14 @@ pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
     let Ok(rd) = std::fs::read_dir(root(config)) else {
         return Err(format!("no session matches \"{raw}\""));
     };
+    let want = raw.to_lowercase();
     let mut ids: Vec<String> = rd
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             name.strip_suffix(".jsonl").map(str::to_string)
         })
-        .filter(|id| id.starts_with(raw))
+        .filter(|id| id.to_lowercase().starts_with(&want))
         .collect();
     ids.sort();
     ids.dedup();
