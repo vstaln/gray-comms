@@ -332,8 +332,7 @@ fn alias(on: bool) -> Result<String, String> {
         ));
     }
     let _ = std::fs::remove_file(&path);
-    std::os::unix::fs::symlink(exe(), &path)
-        .map_err(|e| format!("cannot link {}: {e}", path.display()))?;
+    link_exe(&exe(), &path).map_err(|e| format!("cannot link {}: {e}", path.display()))?;
     Ok(path.display().to_string())
 }
 
@@ -366,4 +365,14 @@ pub fn install(config: &Value, only: Option<&str>, on: bool) -> Result<(), Strin
         if on { "crew alias" } else { "alias removed" }
     );
     Ok(())
+}
+
+#[cfg(unix)]
+fn link_exe(src: &str, dst: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src, dst)
+}
+
+#[cfg(not(unix))]
+fn link_exe(src: &str, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::copy(src, dst).map(|_| ())
 }
