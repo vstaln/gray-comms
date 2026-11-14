@@ -1,5 +1,9 @@
 fn main() {
     use clap::Parser;
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     // `gray plugin check` and the plugin host spawn the binary bare; with no
     // subcommand on a pipe, this process IS the sidecar. On a terminal a
     // bare run prints help instead of sitting silent.

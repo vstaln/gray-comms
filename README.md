@@ -7,16 +7,82 @@ in Rust as a central daemon instead of a P2P mesh.
 Two grays on one box (or a LAN) talk to each other through it. Other
 harnesses can interop on the wire — it's newline-delimited JSON.
 
+Every Gray session also takes part automatically: it joins the mesh under its
+own name, sees the other live sessions in its prompt, and can message one of
+them mid-turn — no room, no registration, nothing to call.
+
 ## What it is
 
 - **Daemon** (`gray-comms run`): a tokio TCP server holding room membership,
   presence, and a bounded durable history in SQLite. Wire ops: `join`,
   `leave`, `join_room`, `say`, `dm`, `who`, `rooms`, `peek`, `status`, `ping`.
-- **Sidecar** (`gray-comms sidecar`): exposes five tools to the model —
-  `comms_join`, `comms_say`, `comms_dm`, `comms_who`, `comms_read` — plus a
-  `prompt/context` hook that notes newly arrived DMs.
-- **CLI**: `join`, `say`, `dm`, `who`, `rooms`, `read`, `listen` for humans
-  and scripts, plus `setup/install/status/stop/restart/doctor/uninstall`.
+- **Sidecar** (`gray comms`): exposes seven tools to the model —
+  `comms_send`, `comms_status`, `comms_join`, `comms_say`, `comms_dm`,
+  `comms_who`, `comms_read` — plus a `prompt/context` hook that notes newly
+  arrived DMs, injects claims and the live-session block (below).
+- **CLI**: `crew`, `send`, `claim`, `join`, `say`, `dm`, `who`, `rooms`,
+  `read`, `listen` for humans and scripts, plus
+  `setup/install/status/stop/restart/doctor/uninstall`.
+
+## Sessions, presence and awareness
+
+- **Identity.** Each session joins the mesh as its own name: the config
+  `name` is a prefix, the suffix is the Gray session's short id —
+  `vstaln.unita`, `vstaln.vorti`, … `"identity": "fixed"` keeps the old
+  single-name behaviour. Names are computed per call from `GRAY_SESSION_ID`
+  (or the hook's `session.id`), never stored.
+- **Presence.** The sidecar opens one connection for the life of the session
+  and pushes `busy`/`idle` from the session's own transcript activity, so
+  `who` shows running sessions without anyone calling `comms_join`.
+- **Awareness block.** The `prompt/context` hook prepends a compact block of
+  the *other* live sessions — short id, status, model, cwd, a cheap recap
+  (latest user line and latest assistant line) and the last 3 transcript
+  lines — capped at ~1200 chars, self and sessions idle >30 min excluded.
+  Sessions come from Gray's own live-session registry (`~/.gray/sessions`
+  plus the `.open` lock), so agents that never joined the mesh still appear.
+  A session that claimed work shows one extra line (`claim: editing
+  src/x.rs (4m)`). The rendered block is hashed per session under
+  `~/.gray/comms/seen/`; an unchanged block is not injected again.
+- **Claims.** `comms_status {"text": "editing src/session.rs"}` (CLI:
+  `gray-comms claim "…"`) publishes what a session is touching. Claims are
+  files under `~/.gray/comms/claims/` and expire on read after 30 minutes;
+  `action:"clear"` drops one early.
+- **Pending mail.** `crew` counts the messages still sitting in a session's
+  `gray send` inbox: a `· 2 mail` badge on live rows, and a `not live ·
+  N queued message(s)` footer for sessions that are not running.
+
+## Other harnesses
+
+`gray-comms install-hook` writes one hook into Claude Code
+(`~/.claude/settings.json`, `SessionStart` + `UserPromptSubmit`), one into
+`~/.codex/hooks.json`, one plugin file into
+`~/.config/opencode/plugins/gray-comms.js`, and the `crew` symlink into
+`~/.local/bin`. It merges and is idempotent; `--uninstall` takes them back
+out.
+
+Those hooks call `gray-comms hook --harness <name>`, which reads the
+harness's own hook JSON on stdin, records the session (cwd, transcript,
+harness), prints the same awareness block a Gray session gets, and drains
+any messages waiting for it. Claude Code and Codex read that stdout as
+context, so a Claude Code session sees the Gray sessions and can message
+them with `crew send <target> "…"`; messages to it are queued in
+`~/.gray/comms/foreign/` and delivered on its next hook call (`--ttl`,
+default 24 h, drops stale ones). Status, recap and tail come from the
+harness's transcript, read-only. Liveness is a process of that harness
+running in the session's cwd, so a finished `claude -p` session drops out of
+`crew` by itself.
+
+## Runs without the daemon
+
+The daemon is optional. Everything that is about *sessions on this machine*
+works with it stopped: the awareness block, `crew`, `comms_send` (which is
+`gray send` underneath), claims, pending mail, and the CLI verbs built on
+them (`crew`, `send`, `claim`). The daemon only adds the parts that need a
+shared broker: rooms, DMs, cross-machine presence, durable history. When it
+is down the hook simply notes no new DMs and `comms_join/say/dm/who/read`
+answer with a fixable error; `gray-comms doctor` still exits 0 and shows
+`• daemon mode — down` with a one-line reminder of what still runs.
+See `RUNTIME.md` for the process and state map.
 
 ## Wire protocol
 
@@ -44,8 +110,12 @@ gray-comms setup        # name, localhost/LAN bind, port, home room, token
 gray-comms install      # runit / systemd --user / detached, auto-detected
 ```
 
-`gray-comms setup` registers the `comms_*` tools in gray's plugin lock. To
-inspect without installing: `gray plugin check <path-to-binary>`.
+`gray-comms setup` (or `gray-comms register`) writes the `comms` entry in
+gray's plugin lock *and* refreshes `~/.gray/plugins/comms-manifest.json`, the
+manifest cache lazy sessions read — a re-register is what makes new tools
+visible without a full reinstall. The entry is marked `global` so the
+awareness block also reaches lean sessions. To inspect without installing:
+`gray plugin check <path-to-binary>`.
 
 ## Config
 
@@ -53,7 +123,9 @@ inspect without installing: `gray plugin check <path-to-binary>`.
 
 | key | meaning |
 |---|---|
-| `name` | this agent's mesh name (`[A-Za-z0-9_.-]{1,64}`) |
+| `name` | mesh prefix (`[A-Za-z0-9_.-]{1,64}`); the whole name under `identity: fixed` |
+| `identity` | `session` (default: join as `<name>.<short id>`) or `fixed` |
+| `name_prefix` | overrides `name` as the prefix in `session` mode |
 | `bind` | daemon bind address — `127.0.0.1` (default) or `0.0.0.0` for LAN |
 | `host` | where clients connect (default: `bind`; `0.0.0.0` → loopback) |
 | `port` | TCP port (default `19876`, agent-comms' own default) |
@@ -100,12 +172,73 @@ history still records the message for everyone:
 
 ## Tools
 
-- `comms_join {room?, status?}` — announce presence, optionally join a room
+- `comms_send {to?, text, all?, mode?, ttl?}` — message another live session
+  by short id, id prefix, pid or cwd substring, or every other session with
+  `all:true`. Delivery is one `gray send`, so it lands mid-turn and is
+  exactly-once; `mode:"kickstart"` frames the text as a directive. A target
+  that is no live session falls back to a mesh DM queued in the daemon; a
+  Claude Code / Codex / OpenCode target gets it queued for its next hook
+  call with `ttl` (default 24h).
+- `comms_status {text?, action?}` — claim what you are working on, or
+  `action:"clear"`; visible in every other session's block for 30 minutes
+- `comms_join {room?, status?}` — subscribe a room (presence is automatic)
 - `comms_say {room?, text}` — post to a room (default: `home_room`)
 - `comms_dm {to, text}` — DM an agent; reports `delivered`/`queued`
-- `comms_who {room?}` — agents or room members with live presence
+- `comms_who {room?}` — mesh agents or room members with live presence
+  (`gray-comms crew` is the live-session view instead)
 - `comms_read {room?|with?|unread?|limit?}` — room history, a DM thread,
   the DM inbox, or only newly arrived DMs
+
+## The TUI
+
+`/comms` with no arguments opens a live dashboard in the terminal: Gray
+suspends its own screen, runs `gray-comms tui`, and restores itself when the
+TUI exits. The same view is `gray-comms tui` from a shell, and bare
+`gray-comms crew` on a tty (a pipe, or `--plain` / `--json`, still prints
+text).
+
+```
+ comms · 8 live · you are ultra                                    21:58
+┌ sessions ────────────────┬ muoni · film director ────────────────┐
+│ ~/content                │ opus 5.5 · busy 2h14m · ctx 161k/200k │
+│ ● muoni   film director  │ › is inkling back                     │
+│   └ ● vorti  act II/IV   │ ‹ The Napoleon, Titan ...             │
+```
+
+Left: sessions grouped by folder, subagents nested under the parent that
+spawned them (`~/.gray/subagents/runs`), foreign harnesses under
+`other apps`, self marked `(you're here)`, claims as a `⚑` line. Names come
+from a nickname (`n`, `~/.gray/comms/nicknames.json`), else the session
+title, else four words of the latest prompt. Badges: `⚠ retrying` when the
+transcript tail shows a provider retry loop, `⚠ quiet Nm` when a busy
+session has not written for over ten minutes, `⚠ ctx NN%` past 90% of the
+model's window (from `~/.gray/models.json`).
+
+Right: model, state and duration, context, and the live transcript tail;
+`PgUp`/`PgDn` scroll back, otherwise it auto-scrolls.
+
+| key | |
+|---|---|
+| `↑` `↓` / `j` `k` | move (folder rows are skipped) |
+| `⏎` | focus the input; `⏎` sends, `alt+⏎` (or `ctrl+⏎` where the terminal reports it) kickstarts |
+| `m` | agent mail: the chronological log in `~/.gray/comms/mail.ndjson` |
+| `n` | rename (nickname, also accepted by `send --to`) |
+| `o` | open that session in a new terminal (`$TERMINAL`, then kitty, alacritty, wezterm, foot, konsole, gnome-terminal, x-terminal-emulator, xterm) |
+| `/` | filter by text |
+| `q` / `esc` | leave the TUI (Gray's screen returns) |
+
+Sends go through the same `gray send` path as `comms_send`, so mid-turn
+delivery and queueing behave identically; the delivery result shows in the
+footer for three seconds. Mail in `~/.gray/cron/inbox` is counted only when
+it is younger than 24 hours — older files are Gray's own history and are
+never touched.
+
+## Runtime
+
+Two or three processes, all documented in `RUNTIME.md`: the supervised
+daemon (runit / systemd --user / detached), one sidecar per live Gray
+session (spawned by Gray, lives as long as the session), and one-shot CLI
+calls. Nothing else to start.
 
 ## Limits
 
@@ -115,5 +248,26 @@ history still records the message for everyone:
   mesh protocol — capability tokens, CBOR handshake — is deliberately not
   mirrored; only the JSON-lines framing and event/message shapes are).
 - Messages ≤ 16 KiB; wire lines ≤ 256 KiB; `peek` ≤ 100 per call.
-- `who` presence is push-listener presence: a connected-but-not-listening
-  client reads as `offline`.
+- `who` presence means "a connection joined as that name is open": a session
+  holds one for its lifetime, and a short-lived client shows as online only
+  while it is connected.
+- The block is a snapshot per turn; a busy neighbour churns it, so it is
+  re-injected whenever it changes, not only when sessions come and go.
+
+## CLI additions
+
+```sh
+gray-comms tui                                           # interactive dashboard
+gray-comms crew [--json] [--tail N] [--dir DIR] [--all]   # live sessions
+gray-comms nick <id> "film director"                     # nickname (clear: --clear)
+gray-comms send "hold off src/x.rs" --to vorti [-k]       # message a session
+gray-comms send "deploying now" --all                     # every other session
+gray-comms claim "editing src/session.rs"                 # claim work (30 min)
+gray-comms install-hook [--harness claude|codex|opencode|all] [--uninstall]
+gray-comms doctor --fix                                   # repair what it can
+gray-comms claim --clear                                  # drop the claim
+gray-comms send "…" --to <stopped session id>             # queues for resume
+```
+
+`gray comms <verb>` is the same CLI inside a Gray shell, and `crew` (installed
+by `install-hook`) is a short alias of `gray-comms crew`.

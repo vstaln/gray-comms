@@ -26,6 +26,8 @@ pub struct Daemon {
     history_limit: u64,
     /// agent name → push channel, only while a `listen` connection lives.
     live: Mutex<HashMap<String, mpsc::Sender<String>>>,
+    /// agent name → open connections that joined as it (presence).
+    attached: Mutex<HashMap<String, usize>>,
     /// "Who answers" routing (disabled = every room behaves as today).
     routing: crate::routing::Routing,
     /// routing-log directory under the comms data dir (`None` for tests
@@ -74,6 +76,7 @@ pub async fn serve_on(listener: TcpListener, config: &Value, store: Store) -> Re
         log_dir,
         history_limit: cfg_u64(config, "history_limit", 500),
         live: Mutex::new(HashMap::new()),
+        attached: Mutex::new(HashMap::new()),
     });
     if let Ok(local) = listener.local_addr() {
         eprintln!("gray-comms listening on {local}");
@@ -112,7 +115,11 @@ pub async fn serve_on(listener: TcpListener, config: &Value, store: Store) -> Re
 
 /// One client connection: the read loop dispatches requests, a writer task
 /// owns the socket so responses and live pushes never interleave mid-line.
-async fn handle_conn(daemon: Arc<Daemon>, sock: TcpStream, _peer: SocketAddr) -> Result<(), String> {
+async fn handle_conn(
+    daemon: Arc<Daemon>,
+    sock: TcpStream,
+    _peer: SocketAddr,
+) -> Result<(), String> {
     let (read, mut write) = sock.into_split();
     let (tx, mut rx) = mpsc::channel::<String>(64);
     let writer = tokio::spawn(async move {
@@ -164,6 +171,14 @@ async fn handle_conn(daemon: Arc<Daemon>, sock: TcpStream, _peer: SocketAddr) ->
                 live.remove(&name);
             }
         }
+        if let Ok(mut attached) = daemon.attached.lock() {
+            match attached.get_mut(&name) {
+                Some(n) if *n > 1 => *n -= 1,
+                _ => {
+                    attached.remove(&name);
+                }
+            }
+        }
     }
     drop(tx);
     let _ = writer.await;
@@ -200,12 +215,7 @@ fn dispatch(
 
 /// join: register/refresh presence. `listen:true` attaches the push channel
 /// and drains queued DMs as dm events. `rooms:[..]` subscribes on the spot.
-fn join(
-    d: &Daemon,
-    params: &Value,
-    me: &mut Option<String>,
-    tx: &mpsc::Sender<String>,
-) -> Reply {
+fn join(d: &Daemon, params: &Value, me: &mut Option<String>, tx: &mpsc::Sender<String>) -> Reply {
     // Auth: when the daemon is configured with a token, every join presents it.
     if let Some(want) = &d.token {
         let got = proto::str_param(params, "auth").unwrap_or("");
@@ -234,6 +244,11 @@ fn join(
         .upsert_agent(name, status.as_deref())
         .map_err(internal)?;
     let missed = d.store.undelivered_dms(name).map_err(internal)?;
+    if me.is_none() {
+        if let Ok(mut attached) = d.attached.lock() {
+            *attached.entry(name.to_string()).or_default() += 1;
+        }
+    }
     if listen {
         if let Ok(mut live) = d.live.lock() {
             live.insert(name.to_string(), tx.clone());
@@ -383,7 +398,10 @@ fn say(d: &Daemon, params: &Value, me: &str) -> Reply {
 fn dm(d: &Daemon, params: &Value, me: &str) -> Reply {
     let to = proto::str_param(params, "to").unwrap_or("").trim();
     if !proto::agent_name_valid(to) {
-        return Err(("bad_name".to_string(), "to must be an agent name".to_string()));
+        return Err((
+            "bad_name".to_string(),
+            "to must be an agent name".to_string(),
+        ));
     }
     let text = checked_text(params)?;
     if !d.store.agent_exists(to).map_err(internal)? {
@@ -418,11 +436,13 @@ fn dm(d: &Daemon, params: &Value, me: &str) -> Reply {
 }
 
 /// who `{room?}` → presence list (room members or every known agent).
+/// Online means an open connection joined as that name: a session holds one
+/// for its lifetime, so presence tracks running sessions rather than calls.
 fn who(d: &Daemon, params: &Value) -> Reply {
-    let live: Vec<String> = d
-        .live
+    let attached: Vec<String> = d
+        .attached
         .lock()
-        .map(|l| l.keys().cloned().collect())
+        .map(|a| a.keys().cloned().collect())
         .unwrap_or_default();
     let mut agents = if let Some(raw) = proto::str_param(params, "room") {
         let room = proto::room_normalize(raw).ok_or_else(bad_room)?;
@@ -447,7 +467,7 @@ fn who(d: &Daemon, params: &Value) -> Reply {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        if !live.iter().any(|n| n == &name) {
+        if !attached.iter().any(|n| n == &name) {
             a["status"] = Value::String("offline".to_string());
         }
         a["rooms"] = Value::Array(
@@ -490,7 +510,10 @@ fn peek(d: &Daemon, params: &Value, me: &str) -> Reply {
     }
     if let Some(with) = proto::str_param(params, "with") {
         if !proto::agent_name_valid(with) {
-            return Err(("bad_name".to_string(), "with must be an agent name".to_string()));
+            return Err((
+                "bad_name".to_string(),
+                "with must be an agent name".to_string(),
+            ));
         }
         let msgs = d.store.dm_thread(me, with, limit).map_err(internal)?;
         return Ok(json!({"with": with, "messages": msgs}));

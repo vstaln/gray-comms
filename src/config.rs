@@ -51,8 +51,7 @@ pub fn atomic_json(path: &Path, data: &Value) -> Result<(), String> {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        opts
-            .open(&tmp_path)
+        opts.open(&tmp_path)
             .and_then(|mut f| f.write_all(text.as_bytes()))
             .map_err(|_| "cannot write config".to_string())?;
     }
@@ -64,13 +63,6 @@ pub fn atomic_json(path: &Path, data: &Value) -> Result<(), String> {
     }
     fs::rename(&tmp_path, path).map_err(|_| "cannot replace config".to_string())?;
     Ok(())
-}
-
-fn str_nonempty(data: &Value, key: &str) -> Result<(), String> {
-    match data.get(key).and_then(Value::as_str) {
-        Some(s) if !s.trim().is_empty() => Ok(()),
-        _ => Err(format!("{key} is missing; run setup")),
-    }
 }
 
 /// Where the client side connects: `host` when set, else `bind`.
@@ -103,10 +95,31 @@ pub fn validate_config(data: &Value) -> Result<(), String> {
     if !data.is_object() {
         return Err("Configuration must be an object".to_string());
     }
-    str_nonempty(data, "name")?;
+    let identity = data
+        .get("identity")
+        .and_then(Value::as_str)
+        .unwrap_or("session");
+    if !matches!(identity, "session" | "fixed") {
+        return Err("identity must be \"session\" or \"fixed\"".to_string());
+    }
     match data.get("name").and_then(Value::as_str) {
-        Some(n) if crate::proto::agent_name_valid(n) => {}
-        _ => return Err("name must be 1-64 chars of [A-Za-z0-9_.-]".to_string()),
+        Some("") if identity == "fixed" => {
+            return Err("identity \"fixed\" needs a name".to_string())
+        }
+        Some(n) if !n.is_empty() && !crate::proto::agent_name_valid(n) => {
+            return Err("name must be 1-64 chars of [A-Za-z0-9_.-]".to_string())
+        }
+        Some(_) => {}
+        None if identity == "fixed" => return Err("name is missing; run setup".to_string()),
+        None => {}
+    }
+    if let Some(p) = data.get("name_prefix") {
+        match p.as_str() {
+            Some(s) if s.is_empty() || crate::proto::agent_name_valid(s) => {}
+            _ => {
+                return Err("name_prefix must be empty or 1-64 chars of [A-Za-z0-9_.-]".to_string())
+            }
+        }
     }
     for key in ["bind", "host"] {
         if let Some(v) = data.get(key).and_then(Value::as_str) {

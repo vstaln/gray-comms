@@ -32,14 +32,30 @@ fn stream_clone(s: &TcpStream) -> Result<TcpStream, String> {
 }
 
 impl Client {
-    /// Connect to the address the config points at.
+    /// Connect to the address the config points at, joining as this
+    /// session's mesh name (config name when no Gray session owns the call).
     pub fn connect(config: &Value) -> Result<Self, String> {
+        let name = crate::identity::mesh_name_now(config, None)?;
+        Self::connect_as(config, &name)
+    }
+
+    /// Connect and join as an explicit agent name.
+    pub fn connect_as(config: &Value, name: &str) -> Result<Self, String> {
         let addr = crate::config::connect_addr(config);
-        Self::connect_addr(&addr, config)
+        Self::connect_addr_as(&addr, config, name)
     }
 
     /// Connect to an explicit `host:port` (tests, ad-hoc clients).
     pub fn connect_addr(addr: &str, config: &Value) -> Result<Self, String> {
+        let name = config
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Self::connect_addr_as(addr, config, &name)
+    }
+
+    pub fn connect_addr_as(addr: &str, config: &Value, name: &str) -> Result<Self, String> {
         let sock_addr: std::net::SocketAddr = addr
             .parse()
             .map_err(|_| format!("bad daemon address {addr}"))?;
@@ -56,11 +72,7 @@ impl Client {
             rooms: Vec::new(),
         };
         // Identity: configured agent name + optional LAN token.
-        let name = config
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let name = name.trim().to_string();
         if name.is_empty() {
             return Err("no agent name configured; run setup".to_string());
         }
@@ -75,7 +87,12 @@ impl Client {
         c.rooms = res
             .get("rooms")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
         Ok(c)
     }

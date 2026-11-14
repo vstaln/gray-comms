@@ -134,7 +134,9 @@ fn rooms_and_history() {
         Some("second")
     );
 
-    // Presence: bea listens (active), ann connected-but-not-listening (offline).
+    // Presence tracks the live connection, not listening: bea and ann both hold
+    // a joined client, so both read active; offline is for agents with no
+    // connection left.
     let res = a.call("who", json!({})).expect("who");
     let agents = res.get("agents").and_then(Value::as_array).unwrap();
     let status_of = |n: &str| {
@@ -146,7 +148,7 @@ fn rooms_and_history() {
             .to_string()
     };
     assert_eq!(status_of("bea"), "active");
-    assert_eq!(status_of("ann"), "offline");
+    assert_eq!(status_of("ann"), "active");
 }
 
 #[test]

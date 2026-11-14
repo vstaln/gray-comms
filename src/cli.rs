@@ -29,7 +29,10 @@ pub enum Command {
     Setup,
     /// Run the comms daemon in the foreground.
     Run,
-    Sidecar,
+    Sidecar {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        args: Vec<String>,
+    },
     /// Print the plugin manifest (what `gray plugin install comms` reads).
     #[command(hide = true)]
     Manifest,
@@ -38,16 +41,31 @@ pub enum Command {
     Status,
     Stop,
     Restart,
-    Doctor,
+    Doctor {
+        /// Repair what can be repaired: config keys, state dirs, plugin
+        /// registration, the crew alias, and a stopped service.
+        #[arg(long)]
+        fix: bool,
+    },
     Uninstall,
     /// Join a room as the configured agent.
-    Join { room: String },
+    Join {
+        room: String,
+    },
     /// Post a message to a room.
-    Say { room: String, text: String },
+    Say {
+        room: String,
+        text: String,
+    },
     /// Direct-message an agent.
-    Dm { to: String, text: String },
+    Dm {
+        to: String,
+        text: String,
+    },
     /// List agents (or one room's members) with presence.
-    Who { room: Option<String> },
+    Who {
+        room: Option<String>,
+    },
     /// List rooms and their members.
     Rooms,
     /// Read history: `--room`, `--with`, `--unread` or the DM inbox.
@@ -60,6 +78,74 @@ pub enum Command {
         unread: bool,
         #[arg(long)]
         limit: Option<u64>,
+    },
+    /// Every live Gray session on this machine — the TUI on a terminal.
+    Crew {
+        /// Machine-readable rows.
+        #[arg(long)]
+        json: bool,
+        /// Transcript lines per session.
+        #[arg(long)]
+        tail: Option<u64>,
+        /// Only sessions whose cwd contains this path fragment.
+        #[arg(long)]
+        dir: Option<String>,
+        /// Include sessions idle longer than 30 minutes.
+        #[arg(long)]
+        all: bool,
+        /// Text output even on a terminal.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// The interactive comms screen: sessions, tails, compose, mail.
+    Tui,
+    /// Name a session for the list and for `send` (a human label).
+    Nick {
+        /// Session id, id prefix, cwd substring or current nickname.
+        target: String,
+        /// New nickname; omitted with --clear to drop it.
+        name: Option<String>,
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Message another live session by short id, pid, cwd substring, or --all.
+    Send {
+        text: String,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        all: bool,
+        /// Deliver as a directive the target acts on now.
+        #[arg(short = 'k', long)]
+        kickstart: bool,
+    },
+    /// Claim what you are working on; shown in every other live session's block for 30 minutes.
+    Claim {
+        /// Free text, e.g. "editing src/session.rs".
+        text: Option<String>,
+        /// Drop the claim early.
+        #[arg(long)]
+        clear: bool,
+        /// Session to attach the claim to (default: this session).
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Fed by a harness hook (Claude Code, Codex, OpenCode): records presence
+    /// and prints the awareness block plus any mail waiting for this session.
+    #[command(hide = true)]
+    Hook {
+        #[arg(long, default_value = "claude")]
+        harness: String,
+    },
+    /// Merge the comms hook into Claude Code, Codex and OpenCode configs and
+    /// install the `crew` alias.
+    InstallHook {
+        /// claude, codex, opencode, or all (default).
+        #[arg(long)]
+        harness: Option<String>,
+        /// Remove the hooks and the alias instead.
+        #[arg(long)]
+        uninstall: bool,
     },
     /// Stream live events (room messages, DMs, joins/leaves) until Ctrl-C.
     Listen {
@@ -99,7 +185,9 @@ pub fn register(config: &Value, config_path: &Path) -> Result<(), String> {
         Value::String("--config".to_string()),
         Value::String(resolved),
     ];
-    let prev_exe = data.pointer("/plugins/comms/argv/0").and_then(Value::as_str);
+    let prev_exe = data
+        .pointer("/plugins/comms/argv/0")
+        .and_then(Value::as_str);
     if prev_exe.is_some_and(|p| p != exe && Path::new(p).is_file()) {
         return Err("Another comms plugin is registered; refusing to overwrite it".to_string());
     }
@@ -128,6 +216,9 @@ pub fn register(config: &Value, config_path: &Path) -> Result<(), String> {
     if entry.get("enabled").is_none() {
         entry["enabled"] = json!(true);
     }
+    // The awareness block has to run in lean sessions too, so the hook is
+    // global: gray only consults global plugins for prompt/context there.
+    entry["global"] = json!(true);
     // Re-register heals a row whose CLI binary moved (reinstall, cargo
     // install to a new prefix); a working custom cli_argv is kept.
     let cli_ok = entry
@@ -138,12 +229,57 @@ pub fn register(config: &Value, config_path: &Path) -> Result<(), String> {
     if !cli_ok {
         entry["cli_argv"] = json!([exe]);
     }
+    let plugins = Path::new(gray_home).join("plugins");
+    let mut manifest = crate::sidecar::MANIFEST.clone();
+    manifest["sidecar_args"] = json!(["sidecar"]);
+    crate::config::atomic_json(&plugins.join("comms-manifest.json"), &manifest)?;
     crate::config::atomic_json(&lock, &data)
 }
 
 /// Parse the service-install answer: default yes.
 pub fn install_confirmed(answer: &str) -> bool {
     matches!(answer.trim().to_lowercase().as_str(), "" | "y" | "yes")
+}
+
+fn ago(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s ago"),
+        60..=3599 => format!("{}m ago", secs / 60),
+        _ => format!("{}h ago", secs / 3600),
+    }
+}
+
+fn pending_of(config: &Value, v: &crate::session::View) -> usize {
+    match v.harness() {
+        Some(_) => crate::foreign::mail_count(config, &v.id),
+        None => crate::session::pending_mail(config, &v.id),
+    }
+}
+
+fn view_json(v: &crate::session::View) -> Value {
+    json!({
+        "id": v.id,
+        "short": v.short,
+        "run": v.run,
+        "pid": v.pid,
+        "cwd": v.cwd,
+        "cwd_tilde": v.cwd_short(),
+        "model": v.model,
+        "origin": v.origin,
+        "status": v.status.label(),
+        "claim": v.claim,
+        "harness": v.harness(),
+        "fresh": v.status.fresh(),
+        "idle_secs": v.idle_secs,
+        "recap": v.recap(),
+        "self": v.me,
+        "tail": v.tail.iter().map(|l| json!({
+            "clock": l.clock,
+            "glyph": l.glyph.ch().to_string(),
+            "text": l.text,
+            "tool": l.tool,
+        })).collect::<Vec<Value>>(),
+    })
 }
 
 fn connect(config_path: &Path) -> Result<(crate::client::Client, Value), String> {
@@ -193,7 +329,11 @@ fn print_event(v: &Value) -> bool {
         "member_joined" | "member_left" => {
             let room = ev.get("room").and_then(Value::as_str).unwrap_or("?");
             let agent = ev.get("agent").and_then(Value::as_str).unwrap_or("?");
-            let verb = if ty == "member_joined" { "joined" } else { "left" };
+            let verb = if ty == "member_joined" {
+                "joined"
+            } else {
+                "left"
+            };
             println!("[#{room}] {agent} {verb}");
         }
         _ => println!("{v}"),
@@ -204,7 +344,16 @@ fn print_event(v: &Value) -> bool {
 /// Dispatch a parsed subcommand.
 pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
     match cmd {
-        Command::Sidecar => crate::sidecar::serve(config_path),
+        Command::Sidecar { args } => {
+            if args.is_empty() {
+                crate::sidecar::serve(config_path)
+            } else {
+                let argv = std::iter::once("gray-comms".to_string()).chain(args.iter().cloned());
+                let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
+                let cfg = cli.config.unwrap_or_else(|| config_path.to_path_buf());
+                run(&cli.command, &cfg)
+            }
+        }
         Command::Manifest => {
             use clap::CommandFactory;
             let mut m = crate::sidecar::MANIFEST.clone();
@@ -293,9 +442,192 @@ pub fn run(cmd: &Command, config_path: &Path) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Doctor => {
+        Command::Doctor { fix } => {
             let config = crate::config::load_config(config_path)?;
+            if *fix {
+                for line in crate::doctor::repairs(&config, config_path)? {
+                    println!("fixed: {line}");
+                }
+                println!();
+            }
             crate::doctor::doctor(&config)
+        }
+        Command::Tui => crate::tui::run(config_path),
+        Command::Nick {
+            target,
+            name,
+            clear,
+        } => {
+            let config = crate::config::load_config(config_path)?;
+            let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+            let views = crate::session::collect(&config, &me, 0, None);
+            let id = match crate::nick::resolve(&config, target) {
+                Some(id) => id,
+                None => match crate::session::find(&config, &views, target) {
+                    Ok(v) => v.id.clone(),
+                    Err(_) => crate::session::find_known(&config, target)?,
+                },
+            };
+            if *clear || name.as_deref().is_none_or(|n| n.trim().is_empty()) {
+                crate::nick::clear(&config, &id)?;
+                println!("cleared nickname for {id}");
+            } else {
+                let name = name.clone().unwrap_or_default();
+                crate::nick::set(&config, &id, &name)?;
+                println!("named {id} {}", name.trim());
+            }
+            Ok(())
+        }
+        Command::Crew {
+            json,
+            tail,
+            dir,
+            all,
+            plain,
+        } => {
+            use std::io::IsTerminal;
+            if !*json
+                && !*plain
+                && tail.is_none()
+                && dir.is_none()
+                && !*all
+                && std::io::stdout().is_terminal()
+            {
+                return crate::tui::run(config_path);
+            }
+            let config = crate::config::load_config(config_path)?;
+            let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+            let mesh = crate::identity::mesh_name_now(&config, Some(&me)).unwrap_or_default();
+            let views =
+                crate::session::collect(&config, &me, tail.unwrap_or(3) as usize, dir.as_deref());
+            let shown: Vec<&crate::session::View> =
+                views.iter().filter(|v| *all || v.status.fresh()).collect();
+            let live_ids: Vec<String> = shown.iter().map(|v| v.id.clone()).collect();
+            let queued: Vec<(String, usize)> = crate::session::pending_inboxes(&config)
+                .into_iter()
+                .filter(|(id, _)| !live_ids.iter().any(|l| l == id))
+                .collect();
+            if *json {
+                let rows: Vec<Value> = shown
+                    .iter()
+                    .map(|v| {
+                        let mut row = view_json(v);
+                        row["pending_mail"] = json!(pending_of(&config, v));
+                        row
+                    })
+                    .collect();
+                let pending: Vec<Value> = queued
+                    .iter()
+                    .map(|(id, n)| json!({"id": id, "pending_mail": n}))
+                    .collect();
+                println!(
+                    "{}",
+                    json!({"self": me, "mesh": mesh, "sessions": rows, "pending": pending})
+                );
+                return Ok(());
+            }
+            println!(
+                "{} live session(s) · you are {} ({})",
+                shown.len(),
+                if me.is_empty() { "?" } else { &me },
+                if mesh.is_empty() { "unjoined" } else { &mesh }
+            );
+            for v in &shown {
+                let mail = pending_of(&config, v);
+                println!(
+                    "• {} {} · {}{} · {}{}{} · pid {} · {}",
+                    v.handle(),
+                    v.status.label(),
+                    match v.harness() {
+                        Some(h) => format!("{h} · "),
+                        None => String::new(),
+                    },
+                    v.short_model(),
+                    v.cwd_short(),
+                    if v.me { " · self" } else { "" },
+                    if mail > 0 {
+                        format!(" · {mail} mail")
+                    } else {
+                        String::new()
+                    },
+                    v.pid
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "?".to_string()),
+                    ago(v.idle_secs)
+                );
+                if !v.claim.is_empty() {
+                    println!("  claim: {}", v.claim);
+                }
+                let recap = v.recap();
+                if !recap.is_empty() {
+                    println!("  {recap}");
+                }
+                for l in &v.tail {
+                    println!("  {} {} {}", l.clock, l.glyph.ch(), l.text);
+                }
+            }
+            for (id, n) in queued.iter().take(5) {
+                println!(
+                    "• {id} not live · {n} queued message(s) · delivered when that session resumes"
+                );
+            }
+            if queued.len() > 5 {
+                println!(
+                    "…and {} more session(s) holding queued mail",
+                    queued.len() - 5
+                );
+            }
+            Ok(())
+        }
+        Command::Send {
+            text,
+            to,
+            all,
+            kickstart,
+        } => {
+            let config = crate::config::load_config(config_path)?;
+            let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
+            let mesh = crate::identity::mesh_name_now(&config, Some(&me))?;
+            let args = json!({
+                "to": to,
+                "text": text,
+                "all": all,
+                "mode": if *kickstart { "kickstart" } else { "message" },
+            });
+            println!(
+                "{}",
+                crate::sidecar::send_tool(&config, &Some(me), &mesh, &args)?
+            );
+            Ok(())
+        }
+        Command::Hook { harness } => {
+            let config = crate::config::load_config(config_path)?;
+            println!("{}", crate::harness::hook(&config, harness)?);
+            Ok(())
+        }
+        Command::InstallHook { harness, uninstall } => {
+            let config = crate::config::load_config(config_path)?;
+            crate::harness::install(&config, harness.as_deref(), !*uninstall)
+        }
+        Command::Claim {
+            text,
+            clear,
+            session,
+        } => {
+            let config = crate::config::load_config(config_path)?;
+            let sid = session
+                .clone()
+                .or_else(|| crate::identity::session_id(&Value::Null))
+                .unwrap_or_default();
+            let args = json!({
+                "text": text,
+                "action": if *clear { "clear" } else { "set" },
+            });
+            println!(
+                "{}",
+                crate::sidecar::status_tool(&config, &Some(sid), &args)?
+            );
+            Ok(())
         }
         Command::Join { room } => {
             let (mut c, _) = connect(config_path)?;
