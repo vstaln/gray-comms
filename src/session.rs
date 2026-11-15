@@ -120,7 +120,7 @@ impl View {
         if self.run.is_empty() {
             self.short.clone()
         } else {
-            format!("{} ({})", self.short, self.run)
+            self.run.clone()
         }
     }
 }
@@ -655,6 +655,20 @@ pub fn collect(config: &Value, me: &str, tail: usize, dir: Option<&str>) -> Vec<
         if let Some(pid) = v.pid {
             v.run = crate::spawns::name_for_pid(config, pid).unwrap_or_default();
         }
+        if v.run.is_empty() {
+            v.run = title(config, &v.id).map(|t| slug(&t)).unwrap_or_default();
+        }
+    }
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for v in &views {
+        if !v.run.is_empty() {
+            *seen.entry(v.run.clone()).or_default() += 1;
+        }
+    }
+    for v in &mut views {
+        if seen.get(&v.run).is_some_and(|n| *n > 1) {
+            v.run = format!("{}-{}", v.run, v.short);
+        }
     }
     views.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then(a.id.cmp(&b.id)));
     views
@@ -874,6 +888,20 @@ pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
                 .join(", ")
         )),
     }
+}
+
+pub fn slug(title: &str) -> String {
+    const SKIP: &[&str] = &[
+        "a", "an", "the", "and", "or", "of", "in", "on", "for", "to", "with", "from", "by", "at",
+        "is", "are", "into", "about",
+    ];
+    title
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| !w.is_empty() && !SKIP.contains(&w.as_str()))
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 pub fn title(config: &Value, id: &str) -> Option<String> {

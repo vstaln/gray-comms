@@ -50,7 +50,7 @@ fn footer(me: &str, overflow: usize) -> String {
         ));
     }
     out.push_str(&format!(
-        "Message one: comms_send {{\"to\":\"<short>\",\"text\":\"...\"}} — short id, the subagent run name in brackets, a pid or a cwd substring all resolve; add \"mode\":\"kickstart\" to direct. Claim what you are editing: comms_status {{\"text\":\"...\"}}. You are {me}."
+        "Message one: comms_send {{\"to\":\"<name>\",\"text\":\"...\"}} — the name shown, a short id, a pid or a cwd substring all resolve; add \"mode\":\"kickstart\" to direct. Claim what you are editing: comms_status {{\"text\":\"...\"}}. You are {me}."
     ));
     out
 }
@@ -64,7 +64,7 @@ pub fn block(config: &Value, me_id: &str, tail: usize, dir: Option<&str>) -> Opt
     let me = views
         .iter()
         .find(|v| v.me)
-        .map(|v| v.short.clone())
+        .map(|v| v.handle())
         .unwrap_or_else(|| short_for(config, me_id));
     let header = format!(
         "comms: {} other session(s) live. Check them before overlapping work; `gray-comms crew` for the full view.",
