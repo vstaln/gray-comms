@@ -94,7 +94,7 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "comms_read",
                 "label": "Comms Read",
-                "description": "Read comms history: a room's recent messages (room), a DM thread with one agent (with), this agent's DM inbox (no args), or only newly arrived DMs (unread:true — also what the prompt hook previews).",
+                "description": "Read comms history: a room's recent messages (room), a thread with one agent or Gray session (with; for a session, each comms_send you made and its reply), this agent's DM inbox (no args), or only newly arrived DMs (unread:true — also what the prompt hook previews).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -173,6 +173,11 @@ fn tool_call(name: &str, params: &Value, config_path: &Path) -> Value {
             Ok(text) => json!({"content": text}),
             Err(e) => not_done(e),
         };
+    }
+    if name == "comms_read" {
+        if let Some(text) = session_thread(&config, &session, &mesh, &args) {
+            return json!({"content": text});
+        }
     }
     let mut client = match crate::client::Client::connect_as(&config, &mesh) {
         Ok(c) => c,
@@ -581,6 +586,54 @@ fn run_tool(
     }
 }
 
+fn session_thread(
+    config: &Value,
+    session: &Option<String>,
+    mesh: &str,
+    args: &Value,
+) -> Option<String> {
+    let me = session.as_deref().filter(|s| !s.is_empty())?;
+    let raw = args.get("with").and_then(Value::as_str)?;
+    let raw = crate::nick::resolve(config, raw).unwrap_or_else(|| raw.to_string());
+    let views = crate::session::collect(config, me, 0, None);
+    let target = match crate::session::find(config, &views, &raw) {
+        Ok(v) => v.id.clone(),
+        Err(_) => crate::session::find_known(config, &raw).ok()?,
+    };
+    let mut thread = crate::session::exchanges(config, &target, me);
+    if thread.is_empty() {
+        return None;
+    }
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .clamp(1, 100) as usize;
+    thread.drain(..thread.len().saturating_sub(limit));
+    let short = crate::session::short_for(config, &target);
+    let clipped = |s: &str, n: usize| -> String {
+        if s.chars().count() <= n {
+            s.to_string()
+        } else {
+            format!("{}…", s.chars().take(n).collect::<String>())
+        }
+    };
+    let lines: Vec<String> = thread
+        .iter()
+        .map(|x| {
+            let reply = match &x.reply {
+                Some(r) => clipped(r, 4000),
+                None => "(no reply yet)".to_string(),
+            };
+            format!(
+                "{mesh} -> {short}: {}\n{short}: {reply}",
+                clipped(&x.sent, 400)
+            )
+        })
+        .collect();
+    Some(lines.join("\n\n"))
+}
+
 fn crew_handles(config: &Value) -> String {
     let me = crate::identity::session_id(&Value::Null).unwrap_or_default();
     let views = crate::session::collect(config, &me, 0, None);
@@ -681,6 +734,19 @@ fn prompt_context(config_path: &Path, params: &Value) -> Value {
     }
     if let Ok(config) = crate::config::load_config(config_path) {
         if let Some(sid) = crate::identity::session_id(params) {
+            let replies = crate::session::new_replies(&config, &sid);
+            if !replies.is_empty() {
+                let parts: Vec<String> = replies
+                    .iter()
+                    .map(|(who, text)| format!("{who}: {text}"))
+                    .collect();
+                text.push_str(&format!(
+                    "\n{} comms repl{} to your messages: {} — read with comms_read with:<name>.",
+                    replies.len(),
+                    if replies.len() == 1 { "y" } else { "ies" },
+                    parts.join(" | ")
+                ));
+            }
             if let Ok(mesh) = crate::identity::mesh_name_now(&config, Some(&sid)) {
                 crate::presence::start(config.clone(), sid.clone(), mesh);
             }
