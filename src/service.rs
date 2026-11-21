@@ -398,7 +398,7 @@ pub fn install_with(sup: Supervisor, config_path: &Path) -> Result<String, Strin
                     .map_err(|_| "cannot read the existing run script".to_string())?;
                 if existing != body {
                     return Err(
-                        "A different service already exists; uninstall it first".to_string(),
+                        "A different service already exists; uninstall it first".to_string()
                     );
                 }
             }

@@ -102,10 +102,8 @@ pub fn repairs(config: &Value, config_path: &Path) -> Result<Vec<String>, String
         done.push("plugin registration and manifest cache".to_string());
     }
     let hooks_before = crate::harness::installed();
-    if crate::harness::install(&fresh, Some("all"), true).is_ok() {
-        if hooks_before.len() != 3 {
-            done.push("harness hooks and the crew alias".to_string());
-        }
+    if crate::harness::install(&fresh, Some("all"), true).is_ok() && hooks_before.len() != 3 {
+        done.push("harness hooks and the crew alias".to_string());
     }
     if crate::service::installed(config_path) {
         let up = crate::service::status(config_path)
@@ -249,13 +247,12 @@ pub fn doctor(config: &Value) -> Result<(), String> {
 
     let hooks = crate::harness::installed();
     println!(
-        "• harness hooks — {} ({}; `gray-comms install-hook` adds the rest)",
+        "• harness hooks — {} (Claude Code, Codex and OpenCode sessions join the same block; `gray-comms install-hook` adds the rest)",
         if hooks.is_empty() {
             "none".to_string()
         } else {
             hooks.join(", ")
-        },
-        "Claude Code, Codex and OpenCode sessions join the same block"
+        }
     );
     let link = crate::harness::alias_path();
     let linked = std::fs::read_link(&link)
@@ -266,7 +263,7 @@ pub fn doctor(config: &Value) -> Result<(), String> {
         if linked {
             format!("{}", link.display())
         } else {
-            format!("missing; `gray-comms install-hook` writes it")
+            "missing; `gray-comms install-hook` writes it".to_string()
         }
     );
 

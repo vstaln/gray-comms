@@ -65,7 +65,11 @@ pub struct ModelSpec {
 
 impl ModelSpec {
     fn from_value(v: &Value) -> Option<Self> {
-        let base_url = v.get("base_url").and_then(Value::as_str)?.trim().to_string();
+        let base_url = v
+            .get("base_url")
+            .and_then(Value::as_str)?
+            .trim()
+            .to_string();
         let model = v.get("model").and_then(Value::as_str)?.trim().to_string();
         if base_url.is_empty() || model.is_empty() {
             return None;
@@ -77,10 +81,7 @@ impl ModelSpec {
                 .get("api_key_env")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            api_key: v
-                .get("api_key")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            api_key: v.get("api_key").and_then(Value::as_str).map(str::to_string),
         })
     }
 
@@ -141,10 +142,7 @@ impl Routing {
             .or_else(|| std::env::var_os("GRAY_HOME").map(PathBuf::from))
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")));
         Routing {
-            enabled: r
-                .get("enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            enabled: r.get("enabled").and_then(Value::as_bool).unwrap_or(false),
             timeout: Duration::from_millis(
                 r.get("timeout_ms")
                     .and_then(Value::as_u64)
@@ -388,7 +386,10 @@ fn parse_pick(raw: &str, offered: &[String]) -> Result<(String, f64), &'static s
         .get("p")
         .or_else(|| v.get("probability"))
         .or_else(|| v.get("confidence"))
-        .and_then(|p| p.as_f64().or_else(|| p.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|p| {
+            p.as_f64()
+                .or_else(|| p.as_str().and_then(|s| s.parse().ok()))
+        })
         .ok_or("bad_answer")?;
     if !p.is_finite() || !(0.0..=1.0).contains(&p) {
         return Err("invalid_p");
@@ -461,7 +462,10 @@ fn private_header_file(header: &str) -> Option<(PathBuf, String)> {
         use std::os::unix::fs::OpenOptionsExt;
         o.mode(0o600);
     }
-    match o.open(&path).and_then(|mut f| f.write_all(header.as_bytes())) {
+    match o
+        .open(&path)
+        .and_then(|mut f| f.write_all(header.as_bytes()))
+    {
         Ok(()) => Some((path.clone(), format!("@{}", path.display()))),
         Err(_) => {
             let _ = std::fs::remove_file(&path);
@@ -736,11 +740,11 @@ mod tests {
         let r = cfg(json!({"dev": "auto"}));
         for body in [
             "not json",
-            r#"{"choice":"nobody","p":0.9}"#,   // never offered
-            r#"{"choice":"ann","p":0.9}"#,     // sender not offered
-            r#"{"choice":"bea"}"#,             // p missing
-            r#"{"choice":"bea","p":"high"}"#,  // p not a number
-            r#"{"choice":"bea","p":1.4}"#,     // p out of range
+            r#"{"choice":"nobody","p":0.9}"#, // never offered
+            r#"{"choice":"ann","p":0.9}"#,    // sender not offered
+            r#"{"choice":"bea"}"#,            // p missing
+            r#"{"choice":"bea","p":"high"}"#, // p not a number
+            r#"{"choice":"bea","p":1.4}"#,    // p out of range
             r#"{"choice":"bea","p":null}"#,
             r#"{}"#,
             "",
