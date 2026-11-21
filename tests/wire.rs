@@ -46,7 +46,9 @@ fn two_clients_exchange_dms() {
 
     let mut alice = Client::connect_addr(&addr, &config("alice")).expect("alice joins");
     // Bob has never joined: the DM is refused, not silently dropped.
-    assert!(alice.call("dm", json!({"to": "bob", "text": "early"})).is_err());
+    assert!(alice
+        .call("dm", json!({"to": "bob", "text": "early"}))
+        .is_err());
 
     let mut bob = Client::connect_addr(&addr, &config("bob")).expect("bob joins");
     // Neither side listens: the DM queues durably.
@@ -56,9 +58,7 @@ fn two_clients_exchange_dms() {
     assert_eq!(res.get("delivery").and_then(Value::as_str), Some("queued"));
 
     // Bob's unread peek drains the queue and marks it delivered.
-    let res = bob
-        .call("peek", json!({"unread": true}))
-        .expect("peek ok");
+    let res = bob.call("peek", json!({"unread": true})).expect("peek ok");
     let msgs = res.get("messages").and_then(Value::as_array).unwrap();
     assert_eq!(msgs.len(), 1);
     assert_eq!(
@@ -99,10 +99,14 @@ fn rooms_and_history() {
     let mut a = Client::connect_addr(&addr, &config("ann")).expect("ann");
     let mut b = Client::connect_addr(&addr, &config("bea")).expect("bea");
 
-    a.call("join_room", json!({"room": "#dev"})).expect("a joins dev");
+    a.call("join_room", json!({"room": "#dev"}))
+        .expect("a joins dev");
     // Saying before joining is refused.
-    assert!(b.call("say", json!({"room": "dev", "text": "nope"})).is_err());
-    b.call("join_room", json!({"room": "dev"})).expect("b joins dev");
+    assert!(b
+        .call("say", json!({"room": "dev", "text": "nope"}))
+        .is_err());
+    b.call("join_room", json!({"room": "dev"}))
+        .expect("b joins dev");
     b.listen().expect("b listens");
 
     a.call("say", json!({"room": "dev", "text": "room hello"}))
@@ -118,7 +122,8 @@ fn rooms_and_history() {
     );
 
     // History pull is bounded and ordered oldest-first.
-    a.call("say", json!({"room": "dev", "text": "second"})).expect("say2");
+    a.call("say", json!({"room": "dev", "text": "second"}))
+        .expect("say2");
     let _ = b.next_event();
     let res = b
         .call("peek", json!({"room": "dev", "limit": 10}))
@@ -187,7 +192,8 @@ fn auto_room_fails_open() {
     let mut bea = Client::connect_addr(&addr, &config("bea")).expect("bea");
     let mut carol = Client::connect_addr(&addr, &config("carol")).expect("carol");
     for c in [&mut ann, &mut bea, &mut carol] {
-        c.call("join_room", json!({"room": "dev"})).expect("join dev");
+        c.call("join_room", json!({"room": "dev"}))
+            .expect("join dev");
     }
     bea.listen().expect("bea listens");
     carol.listen().expect("carol listens");
@@ -220,12 +226,14 @@ fn lead_room_pushes_only_lead() {
     let mut bea = Client::connect_addr(&addr, &config("bea")).expect("bea");
     let mut carol = Client::connect_addr(&addr, &config("carol")).expect("carol");
     for c in [&mut ann, &mut bea, &mut carol] {
-        c.call("join_room", json!({"room": "dev"})).expect("join dev");
+        c.call("join_room", json!({"room": "dev"}))
+            .expect("join dev");
     }
     bea.listen().expect("bea listens");
     carol.listen().expect("carol listens");
 
-    ann.call("say", json!({"room": "dev", "text": "ping"})).expect("say");
+    ann.call("say", json!({"room": "dev", "text": "ping"}))
+        .expect("say");
     let ev = bea.next_event().expect("bea gets the push");
     assert_eq!(
         ev.pointer("/event/message/content").and_then(Value::as_str),
@@ -236,7 +244,11 @@ fn lead_room_pushes_only_lead() {
     // to have arrived (or not).
     std::thread::sleep(std::time::Duration::from_millis(300));
     carol.call("who", json!({})).expect("who");
-    assert!(carol.events.is_empty(), "carol got pushed: {:?}", carol.events);
+    assert!(
+        carol.events.is_empty(),
+        "carol got pushed: {:?}",
+        carol.events
+    );
 }
 
 /// The daemon pushes heartbeat frames to live listeners; on the wire they

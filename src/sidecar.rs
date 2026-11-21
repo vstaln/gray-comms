@@ -770,8 +770,8 @@ fn addressed_send(args: &[String], raw: &str, kickstart: bool, config_path: &Pat
     if target.is_empty() {
         return json!({ "text": "usage: /comms @ID text (send) or /comms !ID text (kickstart)" });
     }
-    let text = if raw.starts_with(first) {
-        raw[first.len()..].trim().to_string()
+    let text = if let Some(rest) = raw.strip_prefix(first) {
+        rest.trim().to_string()
     } else {
         args[1..].join(" ")
     };

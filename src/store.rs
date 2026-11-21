@@ -62,7 +62,15 @@ fn map_err(e: rusqlite::Error) -> String {
     format!("store error: {e}")
 }
 
-fn msg_json(kind: &str, id: String, room: Option<String>, from: String, to: Option<String>, content: String, ts: f64) -> Value {
+fn msg_json(
+    kind: &str,
+    id: String,
+    room: Option<String>,
+    from: String,
+    to: Option<String>,
+    content: String,
+    ts: f64,
+) -> Value {
     let mut m = json!({
         "id": id,
         "from": from,
@@ -225,8 +233,11 @@ impl Store {
             .flatten()
             .collect();
         drop(st);
-        conn.execute("DELETE FROM members WHERE agent=?1", rusqlite::params![agent])
-            .map_err(map_err)?;
+        conn.execute(
+            "DELETE FROM members WHERE agent=?1",
+            rusqlite::params![agent],
+        )
+        .map_err(map_err)?;
         Ok(rooms)
     }
 
@@ -308,11 +319,25 @@ impl Store {
                 |r| Ok((r.get(0)?,)),
             )
             .map_err(map_err)?;
-        Ok(msg_json("room", id, Some(room.to_string()), from.to_string(), None, content.to_string(), ts))
+        Ok(msg_json(
+            "room",
+            id,
+            Some(room.to_string()),
+            from.to_string(),
+            None,
+            content.to_string(),
+            ts,
+        ))
     }
 
     /// Append a DM; `delivered=false` keeps it in the recipient's queue.
-    pub fn add_dm(&self, from: &str, to: &str, content: &str, delivered: bool) -> Result<Value, String> {
+    pub fn add_dm(
+        &self,
+        from: &str,
+        to: &str,
+        content: &str,
+        delivered: bool,
+    ) -> Result<Value, String> {
         let id = self.insert("dm", None, from, Some(to), content, delivered)?;
         let conn = self.conn.lock().map_err(|_| "store locked".to_string())?;
         let (ts,): (f64,) = conn
@@ -322,7 +347,15 @@ impl Store {
                 |r| Ok((r.get(0)?,)),
             )
             .map_err(map_err)?;
-        Ok(msg_json("dm", id, None, from.to_string(), Some(to.to_string()), content.to_string(), ts))
+        Ok(msg_json(
+            "dm",
+            id,
+            None,
+            from.to_string(),
+            Some(to.to_string()),
+            content.to_string(),
+            ts,
+        ))
     }
 
     fn insert(
@@ -339,7 +372,16 @@ impl Store {
         conn.execute(
             "INSERT INTO messages (id,kind,room,from_agent,to_agent,content,ts,delivered)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            rusqlite::params![id, kind, room, from, to, content, now_secs(), delivered as i64],
+            rusqlite::params![
+                id,
+                kind,
+                room,
+                from,
+                to,
+                content,
+                now_secs(),
+                delivered as i64
+            ],
         )
         .map_err(map_err)?;
         Ok(id)
@@ -440,7 +482,9 @@ impl Store {
             .map_err(map_err)?;
         let mut out: Vec<Value> = rows
             .flatten()
-            .map(|(id, from, to, content, ts)| msg_json("dm", id, None, from, Some(to), content, ts))
+            .map(|(id, from, to, content, ts)| {
+                msg_json("dm", id, None, from, Some(to), content, ts)
+            })
             .collect();
         out.reverse();
         Ok(out)

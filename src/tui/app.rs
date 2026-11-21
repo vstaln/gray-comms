@@ -384,7 +384,7 @@ impl App {
             };
         }
         let pct = v.ctx_used * 100 / self.window_for(v).max(1);
-        if pct >= 90 && pct <= 200 {
+        if (90..=200).contains(&pct) {
             return Badge {
                 glyph: "⚠",
                 text: format!("ctx {pct}%"),
