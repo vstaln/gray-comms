@@ -37,6 +37,20 @@ pub struct Daemon {
 
 type Reply = Result<Value, (String, String)>;
 
+const SWEEP_SECS: u64 = 300;
+
+fn sweep(config: &Value) {
+    crate::claim::sweep(config);
+    crate::session::sweep_replies(config);
+}
+
+fn spawn_sweeper(config: Value) {
+    std::thread::spawn(move || loop {
+        sweep(&config);
+        std::thread::sleep(std::time::Duration::from_secs(SWEEP_SECS));
+    });
+}
+
 fn cfg_u64(config: &Value, key: &str, default: u64) -> u64 {
     config.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
@@ -58,6 +72,7 @@ pub async fn serve(config: &Value, store: Store) -> Result<(), String> {
     let listener = TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
+    spawn_sweeper(config.clone());
     serve_on(listener, config, store).await
 }
 

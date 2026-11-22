@@ -91,6 +91,7 @@ pub fn set(config: &Value, session: &str, text: &str) -> Result<Claim, String> {
         text: flat,
         set_ms: now_ms(),
     };
+    sweep(config);
     let d = dir(config);
     std::fs::create_dir_all(&d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
     crate::config::atomic_json(
@@ -104,6 +105,23 @@ pub fn set(config: &Value, session: &str, text: &str) -> Result<Claim, String> {
     )
     .map_err(|e| format!("cannot write the claim: {e}"))?;
     Ok(claim)
+}
+
+pub fn sweep(config: &Value) {
+    let Ok(entries) = std::fs::read_dir(dir(config)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(session) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if get(config, session).is_none() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 pub fn clear(config: &Value, session: &str) -> bool {
