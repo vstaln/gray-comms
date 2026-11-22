@@ -992,6 +992,34 @@ pub fn messaged_since(config: &Value, me: &str, since_ms: i64) -> Vec<String> {
     out
 }
 
+pub fn sweep_replies(config: &Value) {
+    let dir = home(config).join("comms").join("replies");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let live = live_ids(config);
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if live.iter().any(|(l, _)| l == id) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > crate::claim::TTL_SECS);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 fn replies_seen_path(config: &Value, me: &str) -> PathBuf {
     home(config)
         .join("comms")
