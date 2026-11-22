@@ -120,7 +120,7 @@ impl View {
         if self.run.is_empty() {
             self.short.clone()
         } else {
-            format!("{} ({})", self.short, self.run)
+            self.run.clone()
         }
     }
 }
@@ -655,6 +655,20 @@ pub fn collect(config: &Value, me: &str, tail: usize, dir: Option<&str>) -> Vec<
         if let Some(pid) = v.pid {
             v.run = crate::spawns::name_for_pid(config, pid).unwrap_or_default();
         }
+        if v.run.is_empty() {
+            v.run = title(config, &v.id).map(|t| slug(&t)).unwrap_or_default();
+        }
+    }
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for v in &views {
+        if !v.run.is_empty() {
+            *seen.entry(v.run.clone()).or_default() += 1;
+        }
+    }
+    for v in &mut views {
+        if seen.get(&v.run).is_some_and(|n| *n > 1) {
+            v.run = format!("{}-{}", v.run, v.short);
+        }
     }
     views.sort_by(|a, b| b.last_ms.cmp(&a.last_ms).then(a.id.cmp(&b.id)));
     views
@@ -876,6 +890,20 @@ pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
     }
 }
 
+pub fn slug(title: &str) -> String {
+    const SKIP: &[&str] = &[
+        "a", "an", "the", "and", "or", "of", "in", "on", "for", "to", "with", "from", "by", "at",
+        "is", "are", "into", "about",
+    ];
+    title
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| !w.is_empty() && !SKIP.contains(&w.as_str()))
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 pub fn title(config: &Value, id: &str) -> Option<String> {
     let text = std::fs::read_to_string(root(config).join(format!("{id}.title"))).ok()?;
     let line = text.lines().next().unwrap_or("").trim();
@@ -898,4 +926,123 @@ pub fn status_of(config: &Value, id: &str) -> Status {
         Some(v) => v.status,
         None => Status::Idle,
     }
+}
+
+pub struct Exchange {
+    pub sent: String,
+    pub reply: Option<String>,
+    pub reply_at: i64,
+}
+
+fn sender_is(line: &str, me: &str) -> bool {
+    let tail = line.rsplit('.').next().unwrap_or("").trim();
+    !tail.is_empty() && me.starts_with(tail)
+}
+
+pub fn exchanges(config: &Value, target: &str, me: &str) -> Vec<Exchange> {
+    let path = root(config).join(format!("{target}.jsonl"));
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Exchange> = Vec::new();
+    let mut open = false;
+    for e in read_window(&path, meta.len(), meta.len()) {
+        let texts: Vec<&str> = e
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        if e.role == "user" {
+            let Some(first) = texts.first() else {
+                continue;
+            };
+            if let Some(rest) = first.strip_prefix("\u{21b3} from ") {
+                let (sender, body) = rest.split_once('\n').unwrap_or((rest, ""));
+                open = sender_is(sender, me);
+                if open {
+                    out.push(Exchange {
+                        sent: body.trim().to_string(),
+                        reply: None,
+                        reply_at: 0,
+                    });
+                }
+            } else if !e.injected && !first.starts_with("[Context update]") {
+                open = false;
+            }
+        } else if e.role == "assistant" && open && !texts.is_empty() {
+            if let Some(last) = out.last_mut() {
+                last.reply = Some(texts.join("\n\n"));
+                last.reply_at = e.at;
+            }
+        }
+    }
+    out
+}
+
+pub fn messaged_since(config: &Value, me: &str, since_ms: i64) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for m in crate::mailog::recent(config, 500) {
+        if m.at >= since_ms && sender_is(&m.from, me) && !m.to.is_empty() && !out.contains(&m.to) {
+            out.push(m.to);
+        }
+    }
+    out
+}
+
+fn replies_seen_path(config: &Value, me: &str) -> PathBuf {
+    home(config)
+        .join("comms")
+        .join("replies")
+        .join(format!("{me}.json"))
+}
+
+pub fn new_replies(config: &Value, me: &str) -> Vec<(String, String)> {
+    let path = replies_seen_path(config, me);
+    let mut seen: serde_json::Map<String, Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let mut found = Vec::new();
+    let mut changed = false;
+    for target in messaged_since(config, me, now_ms() - 24 * 3600 * 1000) {
+        let marks = seen.get(&target).and_then(Value::as_array);
+        let at = |i: usize| {
+            marks
+                .and_then(|m| m.get(i))
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+        };
+        let (mark, checked) = (at(0), at(1));
+        let mtime = std::fs::metadata(root(config).join(format!("{target}.jsonl")))
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        if mtime <= checked {
+            continue;
+        }
+        let newest = exchanges(config, &target, me)
+            .into_iter()
+            .rfind(|x| x.reply_at > mark);
+        changed = true;
+        seen.insert(target.clone(), serde_json::json!([mark, mtime]));
+        if let Some(x) = newest {
+            found.push((
+                short_for(config, &target),
+                clip(x.reply.as_deref().unwrap_or(""), 80),
+            ));
+            seen.insert(target, serde_json::json!([x.reply_at.max(mark), mtime]));
+        }
+    }
+    if changed {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, Value::Object(seen).to_string());
+    }
+    found
 }
