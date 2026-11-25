@@ -588,6 +588,13 @@ fn build(id: String, path: &Path, pid: Option<u32>) -> Option<View> {
     })
 }
 
+fn hidden_worker(pid: u32) -> bool {
+    std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|raw| {
+        raw.split(|b| *b == 0)
+            .any(|kv| kv == b"GRAY_HIDDEN_WORKER=1")
+    })
+}
+
 pub fn live_ids(config: &Value) -> Vec<(String, Option<u32>)> {
     let dir = root(config);
     let Ok(rd) = std::fs::read_dir(&dir) else {
@@ -604,6 +611,9 @@ pub fn live_ids(config: &Value) -> Vec<(String, Option<u32>)> {
             }
             let id = path.file_stem()?.to_str()?.to_string();
             let pid = holder_pid(&path);
+            if pid.is_some_and(hidden_worker) {
+                return None;
+            }
             Some((id, pid))
         })
         .collect()
