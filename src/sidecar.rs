@@ -836,8 +836,8 @@ fn addressed_send(args: &[String], raw: &str, kickstart: bool, config_path: &Pat
     if target.is_empty() {
         return json!({ "text": "usage: /comms @ID text (send) or /comms !ID text (kickstart)" });
     }
-    let text = if raw.starts_with(first) {
-        raw[first.len()..].trim().to_string()
+    let text = if let Some(rest) = raw.strip_prefix(first) {
+        rest.trim().to_string()
     } else {
         args[1..].join(" ")
     };
@@ -914,7 +914,13 @@ pub fn serve(config_path: &Path) -> ! {
             _ => json!({}),
         };
         let result = dispatch(method, &params, config_path);
-        let row = json!({"id": id, "result": result});
+        let row = if result.get("error").is_some()
+            && result.as_object().is_some_and(|o| o.len() == 1)
+        {
+            json!({"id": id, "error": {"code": -32601, "message": format!("method not found: {method}")}})
+        } else {
+            json!({"id": id, "result": result})
+        };
         if writeln!(out, "{row}").is_err() {
             std::process::exit(1);
         }
