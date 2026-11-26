@@ -266,6 +266,20 @@ pub(crate) fn send_tool(
     };
     let me = session.clone().unwrap_or_default();
     let views = crate::session::collect(config, &me, 0, None);
+    let from = match crate::identity::Identity::from_config(config) {
+        Ok(crate::identity::Identity::Session { .. }) if !me.is_empty() => {
+            Some(crate::nick::label(config, &me))
+                .filter(|n| !n.is_empty())
+                .or_else(|| {
+                    views
+                        .iter()
+                        .find(|v| v.me && !v.run.is_empty())
+                        .map(|v| v.run.clone())
+                })
+                .unwrap_or_else(|| me.clone())
+        }
+        _ => mesh.to_string(),
+    };
     let gray_bin = config.get("gray_bin").and_then(Value::as_str).unwrap_or("");
     let mut out: Vec<String> = Vec::new();
     match target {
@@ -275,13 +289,13 @@ pub(crate) fn send_tool(
                 return Err("no other live session to broadcast to".to_string());
             }
             for v in others {
-                match crate::deliver::send(config, gray_bin, &v.id, mesh, mode, &text) {
+                match crate::deliver::send(config, gray_bin, &v.id, &from, mode, &text) {
                     Ok(sent) => out.push(format!("{} ({}) {}", v.short, v.id, sent.state)),
                     Err(e) => out.push(format!("{} failed: {e}", v.short)),
                 }
             }
             Ok(format!(
-                "sent as {} from {mesh}: {}",
+                "sent as {} from {from}: {}",
                 mode.label(),
                 out.join(", ")
             ))
@@ -292,12 +306,12 @@ pub(crate) fn send_tool(
                 let queued = crate::foreign::queue(
                     config,
                     &v.id,
-                    &format!("↳ from {mesh}\n{}", mode.payload(&text)),
+                    &format!("↳ from {from}\n{}", mode.payload(&text)),
                     ttl,
                 )?;
                 crate::mailog::append(config, mesh, &v.id, mode.label(), "queued", &text);
                 Ok(format!(
-                    "sent as {} from {mesh}: {} ({}) queued for its next hook call ({} message(s) waiting, ttl {}m)",
+                    "sent as {} from {from}: {} ({}) queued for its next hook call ({} message(s) waiting, ttl {}m)",
                     mode.label(),
                     v.short,
                     v.id,
@@ -306,9 +320,9 @@ pub(crate) fn send_tool(
                 ))
             }
             Ok(v) => {
-                let sent = crate::deliver::send(config, gray_bin, &v.id, mesh, mode, &text)?;
+                let sent = crate::deliver::send(config, gray_bin, &v.id, &from, mode, &text)?;
                 Ok(format!(
-                    "sent as {} from {mesh}: {} ({}) {} id {}",
+                    "sent as {} from {from}: {} ({}) {} id {}",
                     mode.label(),
                     v.short,
                     v.id,
@@ -321,9 +335,9 @@ pub(crate) fn send_tool(
                     return Err(why);
                 }
                 if let Ok(id) = crate::session::find_known(config, &raw) {
-                    let sent = crate::deliver::send(config, gray_bin, &id, mesh, mode, &text)?;
+                    let sent = crate::deliver::send(config, gray_bin, &id, &from, mode, &text)?;
                     return Ok(format!(
-                        "sent as {} from {mesh}: {id} (not live) {} id {}",
+                        "sent as {} from {from}: {id} (not live) {} id {}",
                         mode.label(),
                         sent.state,
                         sent.id.chars().take(8).collect::<String>()
@@ -331,7 +345,7 @@ pub(crate) fn send_tool(
                 }
                 let mut notes: Vec<String> = Vec::new();
                 if let Some(run) = crate::spawns::find_run(config, raw.trim()) {
-                    match crate::deliver::steer(config, gray_bin, &run.name, mesh, mode, &text) {
+                    match crate::deliver::steer(config, gray_bin, &run.name, &from, mode, &text) {
                         Ok(_) => {
                             let child = if run.child.is_empty() {
                                 "its session".to_string()
@@ -339,7 +353,7 @@ pub(crate) fn send_tool(
                                 format!("session {}", run.child)
                             };
                             return Ok(format!(
-                                "sent as {} from {mesh}: steered subagent run {} — {} is not live in this mesh, the run picks the message up on its next turn",
+                                "sent as {} from {from}: steered subagent run {} — {} is not live in this mesh, the run picks the message up on its next turn",
                                 mode.label(),
                                 run.name,
                                 child
