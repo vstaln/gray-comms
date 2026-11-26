@@ -9,6 +9,7 @@ const RECAP_CHARS: usize = 90;
 const LINE_CHARS: usize = 88;
 const MIN_SHORT: usize = 5;
 pub const STALE_SECS: u64 = 30 * 60;
+const NAME_MAX: usize = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -657,23 +658,22 @@ pub fn collect(config: &Value, me: &str, tail: usize, dir: Option<&str>) -> Vec<
     }
     let union: Vec<String> = views.iter().map(|v| v.id.clone()).collect();
     let all_short = shorts(&union);
+    let mut seen: HashMap<String, usize> = HashMap::new();
     for v in &mut views {
         if let Some(s) = all_short.get(&v.id) {
             v.short = s.clone();
         }
         v.tail = v.tail.split_off(v.tail.len().saturating_sub(tail));
-        if let Some(pid) = v.pid {
-            v.run = crate::spawns::name_for_pid(config, pid).unwrap_or_default();
-        }
-        if v.run.is_empty() {
-            v.run = title(config, &v.id).map(|t| slug(&t)).unwrap_or_default();
-        }
-    }
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    for v in &views {
-        if !v.run.is_empty() {
-            *seen.entry(v.run.clone()).or_default() += 1;
-        }
+        let spawn = v
+            .pid
+            .and_then(|pid| crate::spawns::name_for_pid(config, pid))
+            .unwrap_or_default();
+        v.run = if spawn.is_empty() {
+            name(config, &v.id).unwrap_or_else(|| v.id.clone())
+        } else {
+            *seen.entry(spawn.clone()).or_default() += 1;
+            spawn
+        };
     }
     for v in &mut views {
         if seen.get(&v.run).is_some_and(|n| *n > 1) {
@@ -722,6 +722,20 @@ fn squash(s: &str) -> String {
         .collect()
 }
 
+fn unique(hits: Vec<&View>) -> Option<&View> {
+    let mut it = hits.into_iter();
+    let first = it.next()?;
+    it.next().is_none().then_some(first)
+}
+
+fn run_topic(run: &str) -> Option<String> {
+    head_tail(&run.to_lowercase()).map(|(head, _)| head.to_string())
+}
+
+fn run_hash(run: &str) -> Option<String> {
+    head_tail(&run.to_lowercase()).map(|(_, tail)| tail.to_string())
+}
+
 pub fn find<'a>(config: &Value, views: &'a [View], raw: &str) -> Result<&'a View, String> {
     let raw = raw.trim().trim_start_matches('@').trim();
     if raw.is_empty() {
@@ -764,6 +778,36 @@ pub fn find<'a>(config: &Value, views: &'a [View], raw: &str) -> Result<&'a View
             .filter(|v| aliases.iter().any(|a| v.short.to_lowercase() == *a))
             .collect(),
     )? {
+        return Ok(found);
+    }
+    let named: Vec<&View> = views
+        .iter()
+        .filter(|v| v.run != v.id && valid_name(&v.run))
+        .collect();
+    if let Some(found) = unique(
+        named
+            .iter()
+            .copied()
+            .filter(|v| {
+                aliases
+                    .iter()
+                    .any(|a| run_hash(&v.run).as_deref() == Some(a.as_str()))
+            })
+            .collect(),
+    ) {
+        return Ok(found);
+    }
+    if let Some(found) = unique(
+        named
+            .iter()
+            .copied()
+            .filter(|v| {
+                aliases
+                    .iter()
+                    .any(|a| run_topic(&v.run).as_deref() == Some(a.as_str()))
+            })
+            .collect(),
+    ) {
         return Ok(found);
     }
     let mut nick_hits: Vec<&View> = Vec::new();
@@ -857,7 +901,7 @@ pub fn find<'a>(config: &Value, views: &'a [View], raw: &str) -> Result<&'a View
         fresh
     };
     Err(format!(
-        "no live session matches \"{raw}\" (tried id, short, subagent run name, mesh nick, pid, cwd); live now: {}",
+        "no live session matches \"{raw}\" (tried id, short, session name, name hash, run name, mesh nick, pid, cwd); live now: {}",
         pool.iter()
             .take(8)
             .map(|v| v.handle())
@@ -900,18 +944,23 @@ pub fn find_known(config: &Value, raw: &str) -> Result<String, String> {
     }
 }
 
-pub fn slug(title: &str) -> String {
-    const SKIP: &[&str] = &[
-        "a", "an", "the", "and", "or", "of", "in", "on", "for", "to", "with", "from", "by", "at",
-        "is", "are", "into", "about",
-    ];
-    title
-        .split(|c: char| !c.is_alphanumeric())
-        .map(str::to_lowercase)
-        .filter(|w| !w.is_empty() && !SKIP.contains(&w.as_str()))
-        .take(3)
-        .collect::<Vec<_>>()
-        .join("-")
+pub fn name(config: &Value, id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(root(config).join(format!("{id}.name"))).ok()?;
+    let line = text.lines().next().unwrap_or("").trim();
+    valid_name(line).then(|| line.to_string())
+}
+
+pub fn valid_name(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw.chars().count() <= NAME_MAX
+        && raw
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn head_tail(run: &str) -> Option<(&str, &str)> {
+    let (head, tail) = run.rsplit_once('-')?;
+    (!head.is_empty() && !tail.is_empty()).then_some((head, tail))
 }
 
 pub fn title(config: &Value, id: &str) -> Option<String> {

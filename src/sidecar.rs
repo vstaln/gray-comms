@@ -55,11 +55,11 @@ pub static MANIFEST: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "comms_send",
                 "label": "Comms Send",
-                "description": "Message another live Gray session by short id, id prefix, pid, cwd substring, or all:true. Lands in that session's context mid-turn through gray send (exactly-once, state is Gray's own receipt); a target that is not a live session falls back to the mesh DM queue, which it picks up at its next check-in. Sender label is this session's mesh name, added automatically.",
+                "description": "Message another live Gray session by session name, its hash, an id prefix, pid, cwd substring, or all:true. Lands in that session's context mid-turn through gray send (exactly-once, state is Gray's own receipt); a target that is not a live session falls back to the mesh DM queue, which it picks up at its next check-in. Sender label is this session's mesh nick, else its session name, added automatically.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "to": {"type": "string", "description": "Target: live session short id or prefix, pid, cwd substring, or mesh agent name"},
+                        "to": {"type": "string", "description": "Target: session name, its hash or topic part, id prefix, pid, cwd substring, or mesh agent name"},
                         "text": {"type": "string", "description": "Message text (plain, one screen at most)"},
                         "all": {"type": "boolean", "description": "Send to every other live session"},
                         "mode": {"type": "string", "enum": ["message", "kickstart"], "description": "message (default) lands as context the target may act on; kickstart frames it as a directive the target acts on now"},
