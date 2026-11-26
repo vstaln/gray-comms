@@ -31,11 +31,18 @@ them mid-turn — no room, no registration, nothing to call.
   `vstaln.unita`, `vstaln.vorti`, … `"identity": "fixed"` keeps the old
   single-name behaviour. Names are computed per call from `GRAY_SESSION_ID`
   (or the hook's `session.id`), never stored.
+- **Session names.** Gray's essentials plugin writes a session's name to
+  `$GRAY_HOME/sessions/<id>.name` (one line of `[a-z0-9-]`, at most 48
+  chars, shaped `topic-words-7f3a`), and renames it as the work moves. Comms
+  only reads that file: a session's name on the mesh is the trimmed contents
+  of `<id>.name` when they are valid, else the full session id. A subagent
+  run keeps the spawn name it was given. `~/.gray/sessions/<id>.title` is
+  still read for the TUI subtitle when no name exists yet.
 - **Presence.** The sidecar opens one connection for the life of the session
   and pushes `busy`/`idle` from the session's own transcript activity, so
   `who` shows running sessions without anyone calling `comms_join`.
 - **Awareness block.** The `prompt/context` hook prepends a compact block of
-  the *other* live sessions — short id, status, model, cwd, a cheap recap
+  the *other* live sessions — session name, status, model, cwd, a cheap recap
   (latest user line and latest assistant line) and the last 3 transcript
   lines — capped at ~1200 chars, self and sessions idle >30 min excluded.
   Sessions come from Gray's own live-session registry (`~/.gray/sessions`
@@ -173,7 +180,8 @@ history still records the message for everyone:
 ## Tools
 
 - `comms_send {to?, text, all?, mode?, ttl?}` — message another live session
-  by short id, id prefix, pid or cwd substring, or every other session with
+  by its session name, the hash on the end of that name or its topic part
+  alone, an id prefix, pid or cwd substring, or every other session with
   `all:true`. Delivery is one `gray send`, so it lands mid-turn and is
   exactly-once; `mode:"kickstart"` frames the text as a directive. A target
   that is no live session falls back to a mesh DM queued in the daemon; a
@@ -208,8 +216,9 @@ text).
 Left: sessions grouped by folder, subagents nested under the parent that
 spawned them (`~/.gray/subagents/runs`), foreign harnesses under
 `other apps`, self marked `(you're here)`, claims as a `⚑` line. Names come
-from a nickname (`n`, `~/.gray/comms/nicknames.json`), else the session
-title, else four words of the latest prompt. Badges: `⚠ retrying` when the
+from a nickname (`n`, `~/.gray/comms/nicknames.json`), else the session name
+Gray writes to `~/.gray/sessions/<id>.name`, else the session title, else
+four words of the latest prompt. Badges: `⚠ retrying` when the
 transcript tail shows a provider retry loop, `⚠ quiet Nm` when a busy
 session has not written for over ten minutes, `⚠ ctx NN%` past 90% of the
 model's window (from `~/.gray/models.json`).

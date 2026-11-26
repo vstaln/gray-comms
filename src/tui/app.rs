@@ -346,6 +346,9 @@ impl App {
         if let Some(nick) = self.nicks.get(&v.id).filter(|n| !n.trim().is_empty()) {
             return nick.clone();
         }
+        if let Some(name) = crate::session::name(&self.config, &v.id) {
+            return name;
+        }
         if let Some(title) = crate::session::title(&self.config, &v.id) {
             return summary(&title);
         }
